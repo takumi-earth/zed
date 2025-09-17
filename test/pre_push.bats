@@ -15,7 +15,7 @@ setup() {
   git config user.email a@b; git config user.name t; git config commit.gpgsign false
   echo t > README.md; git add README.md; git commit -qm init
   # seed remote base so README.md is not considered a new change
-  mkdir -p origin.git; git init -q --bare origin.git; git remote add origin "$PWD/origin.git"; git push origin HEAD:main >/dev/null
+  mkdir -p origin.git; git init -q --bare origin.git; git remote add origin "$PWD/origin.git"; ALLOW_PRE_PUSH_BYPASS=1 git push origin HEAD:main >/dev/null
   # minimal valid series
   cat > .reapply-patches/macOS-modernization/CHECKPOINT <<EOF
 DATE=20250101
