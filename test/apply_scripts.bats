@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-load 'bats-support/load'
-load 'bats-assert/load'
+load '../tooling/bats-support/load'
+load '../tooling/bats-assert/load'
 
 setup() {
   ROOT_DIR="$BATS_TEST_DIRNAME/.."
@@ -42,4 +42,3 @@ EOF
   WT=$(printf '%s' "$output" | sed -n 's/^WORKTREE=\(.*\)$/\1/p')
   [ -n "$WT" ] && [ -d "$WT" ] && [ -f "$WT/FOO" ]
 }
-

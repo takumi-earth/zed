@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-load 'bats-support/load'
-load 'bats-assert/load'
+load '../tooling/bats-support/load'
+load '../tooling/bats-assert/load'
 
 setup() {
   ROOT_DIR="$BATS_TEST_DIRNAME/.."
