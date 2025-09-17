@@ -9,7 +9,7 @@ cd "$ROOT_DIR"
 
 script/bootstrap-tests.sh
 
-export BATS_LIB_PATH="$ROOT_DIR/tooling/bats-support:$ROOT_DIR/tooling/bats-assert"
+export BATS_LIB_PATH="$ROOT_DIR/tooling"
 BATS="$ROOT_DIR/tooling/bats-core/bin/bats"
 
 if command -v kcov >/dev/null 2>&1; then
@@ -21,4 +21,3 @@ if command -v kcov >/dev/null 2>&1; then
 else
   "$BATS" --tap test
 fi
-
