@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Enforce presence of CHECKPOINT and a cumulative patch in the patch series before pushing.
+# Bypass by setting ALLOW_PRE_PUSH_BYPASS=1
+set -euo pipefail
+
+if [[ "${ALLOW_PRE_PUSH_BYPASS:-0}" == "1" ]]; then
+  exit 0
+fi
+
+# Validate default series; allow override via PATCH_SERIES env var
+SERIES="${PATCH_SERIES:-.reapply-patches/macOS-modernization}"
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+
+"$ROOT_DIR/script/validate-patch-setup.sh" --series "$SERIES"
+
+exit 0
+
