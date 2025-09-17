@@ -1,0 +1,149 @@
+# Auto-rebase open PR branches against the default branch (main by default).
+#
+# Requirements:
+# - Repository secret GITEA_TOKEN with API scope that can read PRs and push to branches in this fork.
+# - Optional repository variable DEFAULT_BRANCH to override the default branch name (defaults to "main").
+#
+# Behavior:
+# - Lists open PRs in this repo. For PRs whose head branch is in this repo,
+#   rebases the branch onto the default branch and force-pushes with lease.
+# - On rebase conflict, aborts and posts a comment on the PR asking for manual resolution.
+
+name: Auto Rebase PRs
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"  # every 30 minutes
+  workflow_dispatch: {}
+
+jobs:
+  rebase:
+    runs-on: docker
+    env:
+      DEFAULT_BRANCH: ${{ vars.DEFAULT_BRANCH || 'main' }}
+    steps:
+      - name: Derive server and repo
+        id: drv
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVER_URL="${GITHUB_SERVER_URL:-${GITEA_SERVER_URL:-}}"
+          REPO_PATH="${GITHUB_REPOSITORY:-${GITEA_REPOSITORY:-}}"
+          if [ -z "$SERVER_URL" ] || [ -z "$REPO_PATH" ]; then
+            echo "Missing SERVER_URL or REPO_PATH from env (GITHUB_* or GITEA_*)" >&2
+            exit 1
+          fi
+          echo "SERVER_URL=$SERVER_URL" >> "$GITHUB_OUTPUT"
+          echo "REPO_PATH=$REPO_PATH"   >> "$GITHUB_OUTPUT"
+
+      - name: Prepare repository clone
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init work
+          cd work
+          git config user.name  "gitea-actions"
+          git config user.email "actions@localhost"
+          ORIGIN_URL="${{ steps.drv.outputs.SERVER_URL }}/${{ steps.drv.outputs.REPO_PATH }}.git"
+          git remote add origin "$ORIGIN_URL"
+          git fetch --prune origin
+          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH" || git checkout -B "$DEFAULT_BRANCH"
+
+      - name: List open PRs
+        id: list
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          API_BASE="${{ steps.drv.outputs.SERVER_URL }}/api/v1"
+          REPO="${{ steps.drv.outputs.REPO_PATH }}"
+          AUTH=(-H "Authorization: token ${GITEA_TOKEN}")
+          curl -sfSL "${API_BASE}/repos/${REPO}/pulls?state=open" "${AUTH[@]}" > prs.json
+          echo "Pulled PR list:" >&2; wc -c prs.json >&2 || true
+          # Extract: pr_number, head_branch, base_branch, head_repo_full_name
+          python3 - << 'PY' < prs.json > pr_list.txt
+import sys, json
+data=json.load(sys.stdin)
+def repo_name(r):
+    if not r:
+        return ''
+    # Try common fields
+    return r.get('full_name') or (
+        (r.get('owner',{}).get('login','') + '/' + r.get('name','')).strip('/')
+    )
+for pr in data:
+    num = pr.get('number') or pr.get('index')
+    head = pr.get('head') if isinstance(pr.get('head'), str) else pr.get('head_branch')
+    base = pr.get('base') if isinstance(pr.get('base'), str) else pr.get('base_branch')
+    head_repo = repo_name(pr.get('head_repo') or pr.get('head_repo'))
+    print(f"{num}\t{head or ''}\t{base or ''}\t{head_repo}")
+PY
+          echo "PR list:" >&2; cat pr_list.txt >&2 || true
+
+      - name: Rebase each PR branch
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd work
+          API_BASE="${{ steps.drv.outputs.SERVER_URL }}/api/v1"
+          REPO="${{ steps.drv.outputs.REPO_PATH }}"
+          while IFS=$'\t' read -r PR_NUM HEAD_BRANCH BASE_BRANCH HEAD_REPO; do
+            [ -n "$PR_NUM" ] || continue
+            # Skip if head branch is empty
+            if [ -z "$HEAD_BRANCH" ]; then
+              echo "PR #$PR_NUM: no head branch reported; skipping" >&2
+              continue
+            fi
+            # Only rebase branches that live in this repo
+            if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "${REPO}" ]; then
+              echo "PR #$PR_NUM: head repo is external ($HEAD_REPO); skipping" >&2
+              continue
+            fi
+            echo "Rebasing PR #$PR_NUM branch '$HEAD_BRANCH' onto '$DEFAULT_BRANCH'" >&2
+            git fetch origin "$DEFAULT_BRANCH" "$HEAD_BRANCH" || true
+            if ! git show-ref --verify --quiet "refs/remotes/origin/$HEAD_BRANCH"; then
+              echo "PR #$PR_NUM: origin/$HEAD_BRANCH not found; skipping" >&2
+              continue
+            fi
+            git checkout -B "$HEAD_BRANCH" "origin/$HEAD_BRANCH"
+            set +e
+            git rebase "origin/$DEFAULT_BRANCH"
+            REBASE_STATUS=$?
+            set -e
+            if [ $REBASE_STATUS -ne 0 ]; then
+              echo "PR #$PR_NUM: rebase conflict; aborting and commenting" >&2
+              git rebase --abort || true
+              # Post a comment
+              if [ -n "$GITEA_TOKEN" ]; then
+                COMMENT_PAYLOAD=$(printf '{"body":"Auto-rebase failed due to conflicts. Please rebase onto %s and resolve conflicts."}' "$DEFAULT_BRANCH")
+                curl -sfSL -X POST \
+                     -H "Content-Type: application/json" \
+                     -H "Authorization: token ${GITEA_TOKEN}" \
+                     "${API_BASE}/repos/${REPO}/issues/${PR_NUM}/comments" \
+                     -d "$COMMENT_PAYLOAD" || true
+                # Ensure a 'needs-rebase' label exists
+                LABELS_JSON=$(curl -sfSL -H "Authorization: token ${GITEA_TOKEN}" "${API_BASE}/repos/${REPO}/labels" || echo '[]')
+                LABEL_EXISTS=$(echo "$LABELS_JSON" | grep -i '"name"\s*:\s*"needs-rebase"' || true)
+                if [ -z "$LABEL_EXISTS" ]; then
+                  curl -sfSL -X POST \
+                       -H "Content-Type: application/json" \
+                       -H "Authorization: token ${GITEA_TOKEN}" \
+                       "${API_BASE}/repos/${REPO}/labels" \
+                       -d '{"name":"needs-rebase","color":"#b60205"}' || true
+                fi
+                # Add label to the PR
+                curl -sfSL -X POST \
+                     -H "Content-Type: application/json" \
+                     -H "Authorization: token ${GITEA_TOKEN}" \
+                     "${API_BASE}/repos/${REPO}/issues/${PR_NUM}/labels" \
+                     -d '["needs-rebase"]' || true
+              fi
+              # Do not push in conflict case
+              continue
+            fi
+            echo "PR #$PR_NUM: rebase succeeded; pushing with lease" >&2
+            git push --force-with-lease origin "$HEAD_BRANCH"
+          done < ../pr_list.txt

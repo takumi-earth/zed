@@ -55,19 +55,41 @@ impl MacKeyboardLayout {
         unsafe {
             let current_keyboard = TISCopyCurrentKeyboardLayoutInputSource();
 
-            let id: *mut Object = TISGetInputSourceProperty(
+            // Default values if the system does not report a current layout
+            if current_keyboard.is_null() {
+                return Self {
+                    id: "unknown".to_string(),
+                    name: "Unknown".to_string(),
+                };
+            }
+
+            // Helper to read a UTF8String from an Objective‑C string-like object
+            unsafe fn utf8(obj: *mut Object) -> Option<String> {
+                if obj.is_null() {
+                    return None;
+                }
+                let ptr: *const std::os::raw::c_char = msg_send![obj, UTF8String];
+                if ptr.is_null() {
+                    return None;
+                }
+                // SAFETY: `ptr` is valid for the duration of this call; we copy into an owned String
+                Some(unsafe { CStr::from_ptr(ptr) }.to_str().ok()?.to_string())
+            }
+
+            let id_obj: *mut Object = TISGetInputSourceProperty(
                 current_keyboard,
                 kTISPropertyInputSourceID as *const c_void,
             );
-            let id: *const std::os::raw::c_char = msg_send![id, UTF8String];
-            let id = CStr::from_ptr(id).to_str().unwrap().to_string();
-
-            let name: *mut Object = TISGetInputSourceProperty(
+            let name_obj: *mut Object = TISGetInputSourceProperty(
                 current_keyboard,
                 kTISPropertyLocalizedName as *const c_void,
             );
-            let name: *const std::os::raw::c_char = msg_send![name, UTF8String];
-            let name = CStr::from_ptr(name).to_str().unwrap().to_string();
+
+            let id = utf8(id_obj).unwrap_or_else(|| "unknown".to_string());
+            let name = utf8(name_obj).unwrap_or_else(|| "Unknown".to_string());
+
+            // TISCopy* follows the Create/Copy rule; release when done to avoid leaks
+            let _: () = msg_send![current_keyboard, release];
 
             Self { id, name }
         }

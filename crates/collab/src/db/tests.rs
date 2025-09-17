@@ -198,7 +198,7 @@ fn channel_tree(channels: &[(ChannelId, &[ChannelId], &'static str)]) -> Vec<Cha
 
         result.push(Channel {
             id: *id,
-            name: name.to_string(),
+            name: std::string::ToString::to_string(name),
             visibility: ChannelVisibility::Members,
             parent_path: parent_key,
             channel_order: order,

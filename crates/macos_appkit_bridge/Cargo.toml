@@ -1,0 +1,13 @@
+[package]
+name = "macos_appkit_bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "macos_appkit_bridge"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+
+[build-dependencies]
