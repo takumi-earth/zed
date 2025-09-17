@@ -26,11 +26,20 @@ info() { echo "[patch-validate] $*" >&2; }
 
 [[ -d "$SERIES" ]] || fail "series directory missing: $SERIES"
 
+# Sanitize CHECKPOINT to tolerate pasted content (BOM/ZWSP/NBSP/CR)
 CKPT="$SERIES/CHECKPOINT"
 [[ -f "$CKPT" ]] || fail "missing CHECKPOINT in $SERIES"
+tmp_ckpt=$(mktemp)
+if [[ -f "$ROOT_DIR/script/lib/sanitize.sh" ]]; then
+  # shellcheck source=/dev/null
+  . "$ROOT_DIR/script/lib/sanitize.sh"
+  sanitize_file_to "$CKPT" "$tmp_ckpt"
+else
+  cp "$CKPT" "$tmp_ckpt"
+fi
 
-DATE=$(awk -F= '/^DATE=/{print $2}' "$CKPT" | tr -d '\r\n' || true)
-COVERS=$(awk -F= '/^COVERS=/{print $2}' "$CKPT" | tr -d '\r\n' || true)
+DATE=$(awk -F= '/^DATE=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
+COVERS=$(awk -F= '/^COVERS=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
 [[ "$DATE" =~ ^[0-9]{8}$ ]] || fail "CHECKPOINT DATE invalid or missing (expected YYYYMMDD), got: '${DATE:-<empty>}'"
 [[ "$COVERS" =~ ^[0-9]{4}$ ]] || fail "CHECKPOINT COVERS invalid or missing (expected 4 digits), got: '${COVERS:-<empty>}'"
 

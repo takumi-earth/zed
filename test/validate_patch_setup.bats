@@ -84,3 +84,12 @@ EOF
   assert_output --partial 'exceeds highest numbered patch'
 }
 
+@test 'validate: OK with BOM/ZWSP/NBSP/CRLF in CHECKPOINT' {
+  mkdir -p .reapply-patches/macOS-modernization
+  # Inject BOM + ZWSP + NBSP and CRLF line endings
+  perl -CSDA -e 'print "\x{FEFF}DATE\x{200B}=20250101\r\nCOVERS\x{00A0}=0000\r\n"' > .reapply-patches/macOS-modernization/CHECKPOINT
+  echo 'diff --git a/X b/X' > .reapply-patches/macOS-modernization/20250101-cumulative.patch
+  run "$ROOT_DIR/script/validate-patch-setup.sh" --series .reapply-patches/macOS-modernization
+  assert_success
+  assert_output --partial 'series ok'
+}

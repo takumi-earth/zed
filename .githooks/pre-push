@@ -21,10 +21,19 @@ fi
 #    Parse refs from stdin: <local ref> <local sha> <remote ref> <remote sha>
 #    For each main ref, diff remote..local and ensure paths match allowlist.
 if [[ "${ALLOW_MAIN_CODE_PUSH:-0}" != "1" ]]; then
-  allow_re='^(\.reapply-patches/|script/|\.githooks/|docs/|test/|AGENTS\.md$)'
+  allow_re='^(\.reapply-patches/|script/|\.githooks/|docs/|test/|tooling/|AGENTS\.md$)'
   while read -r local_ref local_sha remote_ref remote_sha; do
     # Stop when no more refs (some Git versions pass nothing on dry runs)
     [[ -z "${local_ref:-}" ]] && continue
+    # Sanitize refs to tolerate CRLF / pasted artifacts
+    if [[ -f "$ROOT_DIR/script/lib/sanitize.sh" ]]; then
+      # shellcheck source=/dev/null
+      . "$ROOT_DIR/script/lib/sanitize.sh"
+      local_ref=$(printf '%s' "$local_ref" | sanitize_line)
+      local_sha=$(printf '%s' "$local_sha" | sanitize_line)
+      remote_ref=$(printf '%s' "$remote_ref" | sanitize_line)
+      remote_sha=$(printf '%s' "$remote_sha" | sanitize_line)
+    fi
     # Only check heads pushes that target main (either side)
     case "$local_ref $remote_ref" in
       refs/heads/main*|*refs/heads/main*)

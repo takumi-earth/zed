@@ -37,3 +37,9 @@ EOF
   assert_output --partial 'Refuses to push non-workflow changes'
 }
 
+@test 'pre-push tolerates CRLF and ZWSP in ref input' {
+  git add .reapply-patches; git commit -qm wf
+  local_ref=$'refs/heads/main\r'; local_sha=$(git rev-parse HEAD); remote_ref=$'refs/heads/main\xE2\x80\x8B'; remote_sha=$(printf '0%.0s' {1..40})
+  run env PATCH_SERIES=.reapply-patches/macOS-modernization "$PWD/.githooks/pre-push" <<<"$local_ref $local_sha $remote_ref $remote_sha"
+  assert_success
+}
