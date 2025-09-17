@@ -20,10 +20,10 @@ Repo Structure
 
 Helper Scripts
 
-- `script/setup-repo.sh` … idempotent repo setup: hooksPath, aliases, am.threeWay, apply.whitespace=fix, rerere.enabled.
+- `script/setup-repo.sh` … idempotent repo setup: hooksPath, aliases, am.threeWay, apply.whitespace=fix, rerere.enabled. (Agentic hint: run this first in any new clone.)
 - `script/gstart.sh` … one command: setup → create worktree → apply latest checkpoint → apply deltas beyond checkpoint → push.
 - `script/new-worktree.sh` … create a worktree + branch from latest upstream (auto picks newer of main/nightly).
-- `script/new-worktree-apply-cumulative.sh` … create worktree, apply checkpoint, then apply numbered deltas based on `CHECKPOINT`; optional `--push`.
+- `script/new-worktree-apply-cumulative.sh` … create worktree, apply checkpoint, then apply numbered deltas based on `CHECKPOINT`; optional `--push`. (Agentic hint: prints WORKTREE= and BRANCH= on success.)
 - `script/apply-cumulative.sh` … apply checkpoint (and deltas) in current repo (non-worktree).
 - `script/cleanup-worktrees.sh` … prune stale worktrees and remove empty `target/bench-*` dirs.
 - `script/bench-macos.sh` … benchmark baseline vs patched builds (macOS, optional release build, worktree-aware).
@@ -79,23 +79,23 @@ Generating New Deltas and Checkpoints
 
 Apply Semantics
 
-- Checkpoint (raw diff): `git apply --index` (scripts prefer direct apply with whitespace fix; 3-way fallback when needed).
+- Checkpoint (raw diff): `git apply --index` (scripts prefer direct apply with whitespace fix; 3-way fallback only when needed).
 - Numbered patches (mail format): `git am -3 000*.patch`.
 - Deltas beyond checkpoint: scripts automatically apply 000*.patch with numbers greater than `CHECKPOINT.COVERS`.
 
 Warnings and What’s OK
 
-- `new blank line at EOF` during apply: benign (intentional final newline). We don’t remove legitimate blank lines; we only trim trailing spaces.
+- `new blank line at EOF` during apply: benign (intentional final newline). We don’t remove legitimate blank lines; we only trim trailing spaces. (Agentic hint: look for actual patch failures, not cosmetic warnings.)
 - Fallbacks in logs: the scripts prefer direct apply when `--check` passes; they only emit 3-way fallback when truly necessary.
 
 Worktree Structure
 
 - Worktrees live under `worktrees/<branch>` and are linked to local branches.
-- Don’t commit in the primary working tree (root); a pre-commit hook blocks it by default.
+- Don’t commit in the primary working tree (root); a pre-commit hook blocks it by default. (Agentic hint: use `git wtn`/`git wta`.)
 - Use `git wtl` to list worktrees and `git wtr` to clean stale ones.
 
 Porting This Workflow
 
-- Copy the `script/` helpers and `.githooks/pre-commit` to new repos; run `script/setup-repo.sh` to install aliases and hooks.
+- Copy the `script/` helpers and `.githooks/{pre-commit,pre-push}` to new repos; run `script/setup-repo.sh` to install aliases and hooks.
 - Create a `.reapply-patches/<series>/` folder with `README.md`, numbered patches, a `CHECKPOINT` file, and a `YYYYMMDD-cumulative.patch`.
 - Update series names and script messages as needed.

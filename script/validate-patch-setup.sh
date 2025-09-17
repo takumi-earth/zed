@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Validate that a patch series directory contains a CHECKPOINT and at least one
-# cumulative patch. Enforces presence and basic consistency.
+# Validate that a patch series contains a CHECKPOINT and a cumulative patch.
+# Agentic hint: Fast-exit on missing bits, prefer helpful errors over silence.
 #
 # Usage:
 #   script/validate-patch-setup.sh [--series <path>]
@@ -71,4 +71,3 @@ fi
 
 info "series ok: $SERIES (DATE=$DATE, COVERS=$COVERS, cumulative=$(basename "$target"))"
 exit 0
-
