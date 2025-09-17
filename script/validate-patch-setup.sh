@@ -40,8 +40,12 @@ else
   cp "$CKPT" "$tmp_ckpt"
 fi
 
-DATE=$(awk -F= '/^DATE=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
-COVERS=$(awk -F= '/^COVERS=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
+# Allow optional whitespace around '=' after sanitization
+DATE=$(awk -F= '/^DATE[[:space:]]*=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
+COVERS=$(awk -F= '/^COVERS[[:space:]]*=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
+# Trim surrounding whitespace from values
+DATE=$(printf '%s' "$DATE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+COVERS=$(printf '%s' "$COVERS" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 [[ "$DATE" =~ ^[0-9]{8}$ ]] || fail "CHECKPOINT DATE invalid or missing (expected YYYYMMDD), got: '${DATE:-<empty>}'"
 [[ "$COVERS" =~ ^[0-9]{4}$ ]] || fail "CHECKPOINT COVERS invalid or missing (expected 4 digits), got: '${COVERS:-<empty>}'"
 
@@ -74,9 +78,12 @@ done
 shopt -u nullglob
 if [[ ${#nums[@]} -gt 0 ]]; then
   IFS=$'\n' nums_sorted=($(sort <<<"${nums[*]}")); unset IFS
-  max_num=${nums_sorted[-1]}
-  if (( 10#$max_num < 10#$COVERS )); then
-    fail "CHECKPOINT COVERS=$COVERS exceeds highest numbered patch ($max_num)"
+  idx=$((${#nums_sorted[@]} - 1))
+  if (( idx >= 0 )); then
+    max_num=${nums_sorted[$idx]}
+    if (( 10#$max_num < 10#$COVERS )); then
+      fail "CHECKPOINT COVERS=$COVERS exceeds highest numbered patch ($max_num)"
+    fi
   fi
 fi
 

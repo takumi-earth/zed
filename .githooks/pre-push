@@ -40,8 +40,10 @@ if [[ "${ALLOW_MAIN_CODE_PUSH:-0}" != "1" ]]; then
         # When remote_sha is all zeros, use upstream remote tip if available
         base="$remote_sha"
         if [[ "$remote_sha" =~ ^0+$ ]]; then
-          # Try origin/main as a best-effort base if remote tip unknown
-          base=$(git rev-parse --quiet --verify origin/main || echo "$remote_sha")
+          # Try origin/main; if unavailable, fall back to empty tree
+          if base=$(git rev-parse --quiet --verify origin/main); then :; else
+            base=$(git hash-object -t tree /dev/null)
+          fi
         fi
         # Compute changed files between base..local
         changed=$(git diff --name-only "$base" "$local_sha" || true)
