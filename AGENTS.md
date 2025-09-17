@@ -21,4 +21,4 @@ Documentation
   - Aliases and common flows
   - How to generate new deltas and checkpoints
   - Worktree hygiene and porting this setup to other repos
-
+  - Pre-push safeguards (CHECKPOINT + cumulative required; main protected to workflow-only changes)

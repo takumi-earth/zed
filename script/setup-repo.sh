@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-time or per-session setup for this repo to enable a worktree-first workflow
-# and patch management helpers.
+# One-time or per-session setup for worktree-first + patch workflow
+# Agentic hint: run this in any new clone before using aliases.
 #
 # Usage:
 #   script/setup-repo.sh [--apply-checkpoint] [--push] [--branch <name>] [--base auto|main|nightly]
@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# hooks
+# hooks (ensure repo uses committed hooks)
 git config --local core.hooksPath .githooks || true
 
 # patch-friendly git config
@@ -37,7 +37,7 @@ git config --local am.threeWay true || true
 git config --local apply.whitespace fix || true
 git config --local rerere.enabled true || true
 
-# aliases
+# aliases (worktree lifecycle + patch helpers)
 git config --local alias.wtn "!script/new-worktree.sh --branch" || true
 git config --local alias.wta "!script/new-worktree-apply-cumulative.sh" || true
 git config --local alias.gta "!script/new-worktree-apply-cumulative.sh --push" || true
@@ -68,4 +68,3 @@ if [[ $DO_APPLY -eq 1 ]]; then
 fi
 
 echo "Setup complete."
-

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Prevent committing in the primary working tree; encourage using worktrees.
+# Agentic pre-commit guard
+# - Prevents committing in the primary working tree; encourages using worktrees
+# - Hint: use `git wtn` / `git wta` to work in a branch-scoped worktree
 set -euo pipefail
 
 GIT_DIR=$(git rev-parse --git-dir)
@@ -13,4 +15,3 @@ if [[ "${ALLOW_ROOT_COMMIT:-0}" != "1" ]] && [[ "$GIT_DIR" == "$GIT_COMMON_DIR" 
 fi
 
 exit 0
-

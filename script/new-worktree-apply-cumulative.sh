@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Create a new worktree from latest upstream base and apply the cumulative checkpoint, then any deltas.
+# Create a new worktree on the newest upstream base and apply the latest
+# cumulative checkpoint, then any numbered deltas beyond CHECKPOINT.COVERS.
+# Agentic hint: prints WORKTREE= and BRANCH= on success.
 # Usage: script/new-worktree-apply-cumulative.sh [--patch <path>] [--branch <name>] [--base auto|main|nightly] [--push]
 
 ROOT_DIR=$(cd -- "$(dirname -- "$0")/.." && pwd)
@@ -101,4 +103,3 @@ echo "WORKTREE=$WT_DIR"
 echo "BRANCH=$BRANCH_NAME"
 
 exit 0
-
