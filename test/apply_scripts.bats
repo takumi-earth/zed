@@ -7,7 +7,7 @@ setup() {
   ROOT_DIR="$BATS_TEST_DIRNAME/.."
   TEST_ROOT="$ROOT_DIR/target/bats-tests/apply"
   rm -rf "$TEST_ROOT"; mkdir -p "$TEST_ROOT"; cd "$TEST_ROOT"; git init -q
-  git config user.email a@b; git config user.name t
+  git config user.email a@b; git config user.name t; git config commit.gpgsign false
   echo t > README.md; git add README.md; git commit -qm init
   mkdir -p .reapply-patches/macOS-modernization script
   cat > .reapply-patches/macOS-modernization/CHECKPOINT <<EOF

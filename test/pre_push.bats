@@ -12,7 +12,7 @@ setup() {
   cp "$ROOT_DIR/script/validate-patch-setup.sh" script/
   chmod +x .githooks/pre-push script/validate-patch-setup.sh
   git config core.hooksPath .githooks
-  git config user.email a@b; git config user.name t
+  git config user.email a@b; git config user.name t; git config commit.gpgsign false
   echo t > README.md; git add README.md; git commit -qm init
   # minimal valid series
   cat > .reapply-patches/macOS-modernization/CHECKPOINT <<EOF

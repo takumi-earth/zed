@@ -9,6 +9,7 @@ set -euo pipefail
 # Default series: .reapply-patches/macOS-modernization
 
 ROOT_DIR=$(cd -- "$(dirname -- "$0")/.." && pwd)
+CALL_DIR=$(pwd)
 cd "$ROOT_DIR"
 
 SERIES=".reapply-patches/macOS-modernization"
@@ -24,10 +25,11 @@ fail() { echo "[patch-validate] $*" >&2; exit 1; }
 warn() { echo "[patch-validate] warn: $*" >&2; }
 info() { echo "[patch-validate] $*" >&2; }
 
-[[ -d "$SERIES" ]] || fail "series directory missing: $SERIES"
+if [[ "$SERIES" = /* ]]; then SERIES_ABS="$SERIES"; else SERIES_ABS="$CALL_DIR/$SERIES"; fi
+[[ -d "$SERIES_ABS" ]] || fail "series directory missing: $SERIES_ABS"
 
 # Sanitize CHECKPOINT to tolerate pasted content (BOM/ZWSP/NBSP/CR)
-CKPT="$SERIES/CHECKPOINT"
+CKPT="$SERIES_ABS/CHECKPOINT"
 [[ -f "$CKPT" ]] || fail "missing CHECKPOINT in $SERIES"
 tmp_ckpt=$(mktemp)
 if [[ -f "$ROOT_DIR/script/lib/sanitize.sh" ]]; then
@@ -44,12 +46,12 @@ COVERS=$(awk -F= '/^COVERS=/{print $2}' "$tmp_ckpt" | tr -d '\r\n' || true)
 [[ "$COVERS" =~ ^[0-9]{4}$ ]] || fail "CHECKPOINT COVERS invalid or missing (expected 4 digits), got: '${COVERS:-<empty>}'"
 
 shopt -s nullglob
-cums=("$SERIES"/*-cumulative.patch)
+cums=("$SERIES_ABS"/*-cumulative.patch)
 shopt -u nullglob
 [[ ${#cums[@]} -gt 0 ]] || fail "no cumulative patch found in $SERIES"
 
 # Prefer the file matching DATE; otherwise accept the lexicographically last.
-EXPECT="$SERIES/$DATE-cumulative.patch"
+EXPECT="$SERIES_ABS/$DATE-cumulative.patch"
 if [[ -f "$EXPECT" ]]; then
   target="$EXPECT"
 else
@@ -63,7 +65,7 @@ head -n1 "$target" | grep -q '^diff --git ' || fail "cumulative patch $target ap
 # If numbered patches exist, ensure max >= COVERS (COVERS is the last included in checkpoint)
 shopt -s nullglob
 nums=()
-for p in "$SERIES"/00*.patch; do
+for p in "$SERIES_ABS"/00*.patch; do
   [[ -f "$p" ]] || continue
   base=$(basename "$p")
   num=$(printf "%s" "$base" | sed -E 's/^([0-9]{4}).*/\1/')

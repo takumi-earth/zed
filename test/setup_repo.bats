@@ -7,7 +7,7 @@ setup() {
   ROOT_DIR="$BATS_TEST_DIRNAME/.."
   TEST_ROOT="$ROOT_DIR/target/bats-tests/setup"
   rm -rf "$TEST_ROOT"; mkdir -p "$TEST_ROOT"; cd "$TEST_ROOT"; git init -q
-  git config user.email a@b; git config user.name t
+  git config user.email a@b; git config user.name t; git config commit.gpgsign false
   echo t > README.md; git add README.md; git commit -qm init
   mkdir -p script; cp "$ROOT_DIR/script/setup-repo.sh" script/
   cp -r "$ROOT_DIR/.githooks" .
