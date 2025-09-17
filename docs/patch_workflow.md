@@ -39,6 +39,18 @@ Aliases (repo-local)
 - `git wtl` → `git worktree list -v`
 - `git wtr` → `script/cleanup-worktrees.sh`
 
+Pre-push Validation
+
+- The repo includes a pre-push hook (`.githooks/pre-push`) that enforces a valid patch series before pushing.
+- It runs `script/validate-patch-setup.sh` to ensure:
+  - the series directory exists (default `.reapply-patches/macOS-modernization`),
+  - a `CHECKPOINT` file is present and well-formed (`DATE=YYYYMMDD`, `COVERS=NNNN`),
+  - at least one `YYYYMMDD-cumulative.patch` exists and looks valid,
+  - if numbered patches exist, the highest number is ≥ `COVERS`.
+- Override/advanced:
+  - Use `PATCH_SERIES=/path/to/series git push` to validate a different series.
+  - Bypass (rare): `ALLOW_PRE_PUSH_BYPASS=1 git push`.
+
 Typical Flows
 
 - Fresh session, defaults end-to-end:
@@ -87,4 +99,3 @@ Porting This Workflow
 - Copy the `script/` helpers and `.githooks/pre-commit` to new repos; run `script/setup-repo.sh` to install aliases and hooks.
 - Create a `.reapply-patches/<series>/` folder with `README.md`, numbered patches, a `CHECKPOINT` file, and a `YYYYMMDD-cumulative.patch`.
 - Update series names and script messages as needed.
-
