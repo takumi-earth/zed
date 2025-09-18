@@ -451,22 +451,24 @@ impl Fs for RealFs {
 
     #[cfg(target_os = "macos")]
     async fn trash_file(&self, path: &Path, _options: RemoveOptions) -> Result<()> {
-        use cocoa::{
-            base::{id, nil},
-            foundation::{NSAutoreleasePool, NSString},
-        };
+        use objc::runtime::Object;
         use objc::{class, msg_send, sel, sel_impl};
+        use std::{ffi::CString, ptr};
 
         unsafe {
-            unsafe fn ns_string(string: &str) -> id {
-                unsafe { NSString::alloc(nil).init_str(string).autorelease() }
+            unsafe fn ns_string(s: &str) -> *mut Object {
+                let cstr = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
+                let ns: *mut Object = msg_send![class!(NSString), alloc];
+                let ns: *mut Object = msg_send![ns, initWithUTF8String: cstr.as_ptr()];
+                let _: *mut Object = msg_send![ns, autorelease];
+                ns
             }
 
-            let url: id = msg_send![class!(NSURL), fileURLWithPath: ns_string(path.to_string_lossy().as_ref())];
-            let array: id = msg_send![class!(NSArray), arrayWithObject: url];
-            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let url: *mut Object = msg_send![class!(NSURL), fileURLWithPath: ns_string(path.to_string_lossy().as_ref())];
+            let array: *mut Object = msg_send![class!(NSArray), arrayWithObject: url];
+            let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
 
-            let _: id = msg_send![workspace, recycleURLs: array completionHandler: nil];
+            let _: () = msg_send![workspace, recycleURLs: array completionHandler: ptr::null_mut::<Object>()];
         }
         Ok(())
     }

@@ -1,388 +1,171 @@
-use crate::{
-    geometry::{
-        rect::RectF,
-        vector::{vec2f, Vector2F},
-    },
-    platform::{
-        self,
-        mac::{platform::NSViewLayerContentsRedrawDuringViewResize, renderer::Renderer},
-        Event, FontSystem, WindowBounds,
-    },
-    Scene,
-};
-use cocoa::{
-    appkit::{NSScreen, NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSView, NSWindow},
-    base::{id, nil, YES},
-    foundation::{NSPoint, NSRect, NSSize},
-};
-use ctor::ctor;
-use foreign_types::ForeignTypeRef;
-use objc::{
-    class,
-    declare::ClassDecl,
-    msg_send,
-    rc::StrongPtr,
-    runtime::{Class, Object, Protocol, Sel},
-    sel, sel_impl,
-};
-use std::{
-    cell::RefCell,
-    ffi::c_void,
-    ptr,
-    rc::{Rc, Weak},
-    sync::Arc,
-};
+use std::sync::Arc;
 
-use super::screen::Screen;
+use crate::platform::FontSystem;
 
-static mut VIEW_CLASS: *const Class = ptr::null();
-const STATE_IVAR: &str = "state";
-
-#[ctor]
-unsafe fn build_classes() {
-    VIEW_CLASS = {
-        let mut decl = ClassDecl::new("GPUIStatusItemView", class!(NSView)).unwrap();
-        decl.add_ivar::<*mut c_void>(STATE_IVAR);
-
-        decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
-
-        decl.add_method(
-            sel!(mouseDown:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(mouseUp:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(rightMouseDown:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(rightMouseUp:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(otherMouseDown:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(otherMouseUp:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(mouseMoved:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(mouseDragged:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(scrollWheel:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(flagsChanged:),
-            handle_view_event as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(makeBackingLayer),
-            make_backing_layer as extern "C" fn(&Object, Sel) -> id,
-        );
-        decl.add_method(
-            sel!(viewDidChangeEffectiveAppearance),
-            view_did_change_effective_appearance as extern "C" fn(&Object, Sel),
-        );
-
-        decl.add_protocol(Protocol::get("CALayerDelegate").unwrap());
-        decl.add_method(
-            sel!(displayLayer:),
-            display_layer as extern "C" fn(&Object, Sel, id),
-        );
-
-        decl.register()
-    };
+extern "C" {
+    fn zed_status_item_create() -> u64;
+    fn zed_status_item_set_title(id: u64, title: *const ::std::os::raw::c_char);
+    fn zed_status_item_remove(id: u64);
+    fn zed_status_item_set_image(
+        id: u64,
+        bytes: *const u8,
+        len: usize,
+        uti: *const ::std::os::raw::c_char,
+        is_template: bool,
+    );
+    fn zed_status_item_set_menu(id: u64, json: *const ::std::os::raw::c_char);
 }
 
-pub struct StatusItem(Rc<RefCell<StatusItemState>>);
-
-struct StatusItemState {
-    native_item: StrongPtr,
-    native_view: StrongPtr,
-    renderer: Renderer,
-    scene: Option<Scene>,
-    event_callback: Option<Box<dyn FnMut(Event) -> bool>>,
-    appearance_changed_callback: Option<Box<dyn FnMut()>>,
+pub struct StatusItem {
+    id: u64,
 }
 
 impl StatusItem {
-    pub fn add(fonts: Arc<dyn FontSystem>) -> Self {
-        unsafe {
-            let renderer = Renderer::new(false, fonts);
-            let status_bar = NSStatusBar::systemStatusBar(nil);
-            let native_item =
-                StrongPtr::retain(status_bar.statusItemWithLength_(NSSquareStatusItemLength));
+    pub fn add(_fonts: Arc<dyn FontSystem>) -> Self {
+        let id = unsafe { zed_status_item_create() };
+        // Give it a default title for now; callers can change it
+        if let Ok(c) = std::ffi::CString::new("Zed") {
+            unsafe { zed_status_item_set_title(id, c.as_ptr()) };
+        }
+        Self { id }
+    }
 
-            let button = native_item.button();
-            let _: () = msg_send![button, setHidden: YES];
+    pub fn set_title(&self, title: &str) {
+        if let Ok(c) = std::ffi::CString::new(title) {
+            unsafe { zed_status_item_set_title(self.id, c.as_ptr()) };
+        }
+    }
 
-            let native_view = msg_send![VIEW_CLASS, alloc];
-            let state = Rc::new(RefCell::new(StatusItemState {
-                native_item,
-                native_view: StrongPtr::new(native_view),
-                renderer,
-                scene: None,
-                event_callback: None,
-                appearance_changed_callback: None,
-            }));
+    pub fn set_click_handler(&self, handler: Box<dyn FnMut() + Send>) {
+        register_status_item_handler(self.id, handler);
+    }
 
-            let parent_view = button.superview().superview();
-            NSView::initWithFrame_(
-                native_view,
-                NSRect::new(NSPoint::new(0., 0.), NSView::frame(parent_view).size),
-            );
-            (*native_view).set_ivar(
-                STATE_IVAR,
-                Weak::into_raw(Rc::downgrade(&state)) as *const c_void,
-            );
-            native_view.setWantsBestResolutionOpenGLSurface_(YES);
-            native_view.setWantsLayer(YES);
-            let _: () = msg_send![
-                native_view,
-                setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawDuringViewResize
-            ];
-
-            parent_view.addSubview_(native_view);
-
-            {
-                let state = state.borrow();
-                let layer = state.renderer.layer();
-                let scale_factor = state.scale_factor();
-                let size = state.content_size() * scale_factor;
-                layer.set_contents_scale(scale_factor.into());
-                layer.set_drawable_size(metal::CGSize::new(size.x().into(), size.y().into()));
-            }
-
-            Self(state)
+    pub fn set_image(&self, format: crate::ImageFormat, bytes: &[u8], template: bool) {
+        let uti = match format {
+            crate::ImageFormat::Png => "public.png",
+            crate::ImageFormat::Jpeg => "public.jpeg",
+            crate::ImageFormat::Tiff => "public.tiff",
+            crate::ImageFormat::Webp => "org.webmproject.webp",
+            crate::ImageFormat::Gif => "com.compuserve.gif",
+            crate::ImageFormat::Bmp => "com.microsoft.bmp",
+            crate::ImageFormat::Svg => "public.svg-image",
+        };
+        if let Ok(cuti) = std::ffi::CString::new(uti) {
+            unsafe {
+                zed_status_item_set_image(
+                    self.id,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    cuti.as_ptr(),
+                    template,
+                )
+            };
         }
     }
 }
 
-impl platform::Window for StatusItem {
-    fn bounds(&self) -> WindowBounds {
-        self.0.borrow().bounds()
-    }
-
-    fn content_size(&self) -> Vector2F {
-        self.0.borrow().content_size()
-    }
-
-    fn scale_factor(&self) -> f32 {
-        self.0.borrow().scale_factor()
-    }
-
-    fn appearance(&self) -> platform::Appearance {
-        unsafe {
-            let appearance: id =
-                msg_send![self.0.borrow().native_item.button(), effectiveAppearance];
-            platform::Appearance::from_native(appearance)
-        }
-    }
-
-    fn screen(&self) -> Rc<dyn platform::Screen> {
-        unsafe {
-            Rc::new(Screen {
-                native_screen: self.0.borrow().native_window().screen(),
-            })
-        }
-    }
-
-    fn mouse_position(&self) -> Vector2F {
-        unimplemented!()
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn set_input_handler(&mut self, _: Box<dyn platform::InputHandler>) {}
-
-    fn prompt(
-        &self,
-        _: crate::platform::PromptLevel,
-        _: &str,
-        _: &[&str],
-    ) -> postage::oneshot::Receiver<usize> {
-        unimplemented!()
-    }
-
-    fn activate(&self) {
-        unimplemented!()
-    }
-
-    fn set_title(&mut self, _: &str) {
-        unimplemented!()
-    }
-
-    fn set_edited(&mut self, _: bool) {
-        unimplemented!()
-    }
-
-    fn show_character_palette(&self) {
-        unimplemented!()
-    }
-
-    fn minimize(&self) {
-        unimplemented!()
-    }
-
-    fn zoom(&self) {
-        unimplemented!()
-    }
-
-    fn present_scene(&mut self, scene: Scene) {
-        self.0.borrow_mut().scene = Some(scene);
-        unsafe {
-            let _: () = msg_send![*self.0.borrow().native_view, setNeedsDisplay: YES];
-        }
-    }
-
-    fn toggle_fullscreen(&self) {
-        unimplemented!()
-    }
-
-    fn on_event(&mut self, callback: Box<dyn FnMut(platform::Event) -> bool>) {
-        self.0.borrow_mut().event_callback = Some(callback);
-    }
-
-    fn on_active_status_change(&mut self, _: Box<dyn FnMut(bool)>) {}
-
-    fn on_resize(&mut self, _: Box<dyn FnMut()>) {}
-
-    fn on_fullscreen(&mut self, _: Box<dyn FnMut(bool)>) {}
-
-    fn on_moved(&mut self, _: Box<dyn FnMut()>) {}
-
-    fn on_should_close(&mut self, _: Box<dyn FnMut() -> bool>) {}
-
-    fn on_close(&mut self, _: Box<dyn FnOnce()>) {}
-
-    fn on_appearance_changed(&mut self, callback: Box<dyn FnMut()>) {
-        self.0.borrow_mut().appearance_changed_callback = Some(callback);
-    }
-
-    fn is_topmost_for_position(&self, _: Vector2F) -> bool {
-        true
+impl Drop for StatusItem {
+    fn drop(&mut self) {
+        unregister_status_item_handler(self.id);
+        unsafe { zed_status_item_remove(self.id) };
     }
 }
 
-impl StatusItemState {
-    fn bounds(&self) -> WindowBounds {
-        unsafe {
-            let window: id = self.native_window();
-            let screen_frame = window.screen().visibleFrame();
-            let window_frame = NSWindow::frame(window);
-            let origin = vec2f(
-                window_frame.origin.x as f32,
-                (window_frame.origin.y - screen_frame.size.height - window_frame.size.height)
-                    as f32,
-            );
-            let size = vec2f(
-                window_frame.size.width as f32,
-                window_frame.size.height as f32,
-            );
-            WindowBounds::Fixed(RectF::new(origin, size))
-        }
-    }
+// Click handler registry
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
-    fn content_size(&self) -> Vector2F {
-        unsafe {
-            let NSSize { width, height, .. } =
-                NSView::frame(self.native_item.button().superview().superview()).size;
-            vec2f(width as f32, height as f32)
-        }
-    }
+static STATUS_ITEM_HANDLERS: OnceLock<Mutex<HashMap<u64, Box<dyn FnMut() + Send>>>> = OnceLock::new();
 
-    fn scale_factor(&self) -> f32 {
-        unsafe {
-            let window: id = msg_send![self.native_item.button(), window];
-            NSScreen::backingScaleFactor(window.screen()) as f32
-        }
-    }
+fn register_status_item_handler(id: u64, handler: Box<dyn FnMut() + Send>) {
+    STATUS_ITEM_HANDLERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(id, handler);
+}
 
-    pub fn native_window(&self) -> id {
-        unsafe { msg_send![self.native_item.button(), window] }
+fn unregister_status_item_handler(id: u64) {
+    STATUS_ITEM_HANDLERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .remove(&id);
+}
+
+#[no_mangle]
+pub extern "C" fn gpui_status_item_clicked(id: u64) {
+    if let Some(mut handler) = STATUS_ITEM_HANDLERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+    {
+        handler();
     }
 }
 
-extern "C" fn dealloc_view(this: &Object, _: Sel) {
-    unsafe {
-        drop_state(this);
+// Status item menu support
+use crate::menu::{Menu as AppMenu, MenuItem as AppMenuItem};
 
-        let _: () = msg_send![super(this, class!(NSView)), dealloc];
-    }
-}
+static STATUS_ITEM_MENU_ACTIONS: OnceLock<Mutex<HashMap<u64, Vec<Box<dyn crate::Action + Send>>>>> = OnceLock::new();
 
-extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
-    unsafe {
-        if let Some(state) = get_state(this).upgrade() {
-            let mut state_borrow = state.as_ref().borrow_mut();
-            if let Some(event) =
-                Event::from_native(native_event, Some(state_borrow.content_size().y()))
-            {
-                if let Some(mut callback) = state_borrow.event_callback.take() {
-                    drop(state_borrow);
-                    callback(event);
-                    state.borrow_mut().event_callback = Some(callback);
+impl StatusItem {
+    pub fn set_menu(&self, menu: &AppMenu) {
+        // Build JSON and tag -> action map per status item id
+        #[derive(serde::Serialize)]
+        #[serde(tag = "kind", rename_all = "lowercase")]
+        enum JsItem<'a> { Action { title: &'a str, tag: u64 }, Separator, Submenu { title: &'a str, items: Vec<JsItem<'a>> } }
+        #[derive(serde::Serialize)]
+        struct JsSpec<'a> { items: Vec<JsItem<'a>> }
+
+        let mut actions = Vec::<Box<dyn crate::Action + Send>>::new();
+        fn encode_items<'a>(src: &'a [AppMenuItem], actions: &mut Vec<Box<dyn crate::Action + Send>>, out: &mut Vec<JsItem<'a>>) {
+            for item in src {
+                match item {
+                    AppMenuItem::Separator => out.push(JsItem::Separator),
+                    AppMenuItem::Action { name, action, .. } => {
+                        let tag = actions.len() as u64;
+                        actions.push(action.boxed_clone());
+                        out.push(JsItem::Action { title: name, tag });
+                    }
+                    AppMenuItem::Submenu(AppMenu { name, items }) => {
+                        let mut sub = Vec::new();
+                        encode_items(items, actions, &mut sub);
+                        out.push(JsItem::Submenu { title: name, items: sub });
+                    }
+                    AppMenuItem::SystemMenu(_) => {
+                        // Not supported in status item menu context currently
+                    }
                 }
             }
         }
-    }
-}
 
-extern "C" fn make_backing_layer(this: &Object, _: Sel) -> id {
-    if let Some(state) = unsafe { get_state(this).upgrade() } {
-        let state = state.borrow();
-        state.renderer.layer().as_ptr() as id
-    } else {
-        nil
-    }
-}
-
-extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
-    unsafe {
-        if let Some(state) = get_state(this).upgrade() {
-            let mut state = state.borrow_mut();
-            if let Some(scene) = state.scene.take() {
-                state.renderer.render(&scene);
-            }
+        let mut js_items = Vec::new();
+        encode_items(&menu.items, &mut actions, &mut js_items);
+        let spec = JsSpec { items: js_items };
+        let json = serde_json::to_string(&spec).unwrap_or_else(|_| "{\"items\":[]}".into());
+        STATUS_ITEM_MENU_ACTIONS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(self.id, actions);
+        if let Ok(cjson) = std::ffi::CString::new(json) {
+            unsafe { zed_status_item_set_menu(self.id, cjson.as_ptr()) };
         }
     }
 }
 
-extern "C" fn view_did_change_effective_appearance(this: &Object, _: Sel) {
-    unsafe {
-        if let Some(state) = get_state(this).upgrade() {
-            let mut state_borrow = state.as_ref().borrow_mut();
-            if let Some(mut callback) = state_borrow.appearance_changed_callback.take() {
-                drop(state_borrow);
-                callback();
-                state.borrow_mut().appearance_changed_callback = Some(callback);
-            }
+#[no_mangle]
+pub extern "C" fn gpui_status_item_menu_action(id: u64, tag: u64) {
+    if let Some(vec) = STATUS_ITEM_MENU_ACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+    {
+        if let Some(action) = vec.get(tag as usize) {
+            super::platform::dispatch_menu_action(action.as_ref());
         }
     }
-}
-
-unsafe fn get_state(object: &Object) -> Weak<RefCell<StatusItemState>> {
-    let raw: *mut c_void = *object.get_ivar(STATE_IVAR);
-    let weak1 = Weak::from_raw(raw as *mut RefCell<StatusItemState>);
-    let weak2 = weak1.clone();
-    let _ = Weak::into_raw(weak1);
-    weak2
-}
-
-unsafe fn drop_state(object: &Object) {
-    let raw: *const c_void = *object.get_ivar(STATE_IVAR);
-    Weak::from_raw(raw as *const RefCell<StatusItemState>);
 }

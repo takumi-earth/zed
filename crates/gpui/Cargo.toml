@@ -30,7 +30,6 @@ macos-blade = [
     "blade-macros",
     "blade-util",
     "bytemuck",
-    "objc2",
     "objc2-metal",
 ]
 wayland = [
@@ -127,11 +126,12 @@ thiserror.workspace = true
 util.workspace = true
 uuid.workspace = true
 waker-fn = "1.2.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+macos_appkit_bridge = { path = "../macos_appkit_bridge" }
 lyon = "1.0"
 workspace-hack.workspace = true
 libc.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
 block = "0.1"
 cocoa.workspace = true
 core-foundation.workspace = true
@@ -144,8 +144,35 @@ foreign-types = "0.5"
 log.workspace = true
 media.workspace = true
 objc.workspace = true
-objc2 = { version = "0.6", optional = true }
+objc2 = { version = "0.6" }
 objc2-metal = { version = "0.3", optional = true }
+icrate = { version = "0.1.2", features = [
+    # Base modules
+    "Foundation", "AppKit",
+    # Fine-grained Foundation types we use or plan to migrate to
+    "Foundation_NSAutoreleasePool",
+    "Foundation_NSArray",
+    "Foundation_NSMutableIndexSet",
+    "Foundation_NSProcessInfo",
+    "Foundation_NSString",
+    "Foundation_NSUserDefaults",
+    # Fine-grained AppKit types we use or plan to migrate to
+    "AppKit_NSApplication",
+    "AppKit_NSAppearance",
+    "AppKit_NSAlert",
+    "AppKit_NSEvent",
+    "AppKit_NSScroller",
+    "AppKit_NSPasteboard",
+    "AppKit_NSStatusBar",
+    "AppKit_NSStatusItem",
+    "AppKit_NSMenu",
+    "AppKit_NSMenuItem",
+    "AppKit_NSScreen",
+    "AppKit_NSTrackingArea",
+    "AppKit_NSView",
+    "AppKit_NSVisualEffectView",
+    "AppKit_NSWindow",
+] }
 #TODO: replace with "objc2"
 metal.workspace = true
 

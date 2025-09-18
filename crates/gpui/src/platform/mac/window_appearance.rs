@@ -1,37 +1,24 @@
 use crate::WindowAppearance;
-use cocoa::{
-    appkit::{NSAppearanceNameVibrantDark, NSAppearanceNameVibrantLight},
-    base::id,
-    foundation::NSString,
+use icrate::AppKit::{
+    NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSAppearanceNameVibrantDark,
+    NSAppearanceNameVibrantLight,
 };
+use objc::runtime::Object;
 use objc::{msg_send, sel, sel_impl};
-use std::ffi::CStr;
 
 impl WindowAppearance {
-    pub(crate) unsafe fn from_native(appearance: id) -> Self {
-        let name: id = msg_send![appearance, name];
-        unsafe {
-            if name == NSAppearanceNameVibrantLight {
-                Self::VibrantLight
-            } else if name == NSAppearanceNameVibrantDark {
-                Self::VibrantDark
-            } else if name == NSAppearanceNameAqua {
-                Self::Light
-            } else if name == NSAppearanceNameDarkAqua {
-                Self::Dark
-            } else {
-                println!(
-                    "unknown appearance: {:?}",
-                    CStr::from_ptr(name.UTF8String())
-                );
-                Self::Light
-            }
+    pub(crate) unsafe fn from_native(appearance: *mut Object) -> Self {
+        let name: *mut Object = unsafe { msg_send![appearance, name] };
+        if unsafe { name == (NSAppearanceNameVibrantLight as *const _ as *mut Object) } {
+            Self::VibrantLight
+        } else if unsafe { name == (NSAppearanceNameVibrantDark as *const _ as *mut Object) } {
+            Self::VibrantDark
+        } else if unsafe { name == (NSAppearanceNameAqua as *const _ as *mut Object) } {
+            Self::Light
+        } else if unsafe { name == (NSAppearanceNameDarkAqua as *const _ as *mut Object) } {
+            Self::Dark
+        } else {
+            Self::Light
         }
     }
-}
-
-#[link(name = "AppKit", kind = "framework")]
-unsafe extern "C" {
-    pub static NSAppearanceNameAqua: id;
-    pub static NSAppearanceNameDarkAqua: id;
 }

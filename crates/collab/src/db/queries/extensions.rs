@@ -255,7 +255,7 @@ impl Database {
 
                 let insert = extension::Entity::insert(extension::ActiveModel {
                     name: ActiveValue::Set(latest_version.name.clone()),
-                    external_id: ActiveValue::Set(external_id.to_string()),
+                    external_id: ActiveValue::Set(std::string::ToString::to_string(external_id)),
                     id: ActiveValue::NotSet,
                     latest_version: ActiveValue::Set(latest_version.version.to_string()),
                     total_download_count: ActiveValue::NotSet,
@@ -282,7 +282,9 @@ impl Database {
                     extension_version::ActiveModel {
                         extension_id: ActiveValue::Set(extension.id),
                         published_at: ActiveValue::Set(version.published_at),
-                        version: ActiveValue::Set(version.version.to_string()),
+                        version: ActiveValue::Set(std::string::ToString::to_string(
+                            &version.version,
+                        )),
                         authors: ActiveValue::Set(version.authors.join(", ")),
                         repository: ActiveValue::Set(version.repository.clone()),
                         description: ActiveValue::Set(version.description.clone()),

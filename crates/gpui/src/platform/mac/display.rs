@@ -1,13 +1,10 @@
 use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
 use anyhow::Result;
-use cocoa::{
-    appkit::NSScreen,
-    base::{id, nil},
-    foundation::{NSDictionary, NSString},
-};
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
 use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
-use objc::{msg_send, sel, sel_impl};
+use objc::runtime::Object;
+use objc::{class, msg_send, sel, sel_impl};
+use std::ffi::CString;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -32,13 +29,18 @@ impl MacDisplay {
         //
         // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
         unsafe {
-            let screens = NSScreen::screens(nil);
-            let screen = cocoa::foundation::NSArray::objectAtIndex(screens, 0);
-            let device_description = NSScreen::deviceDescription(screen);
-            let screen_number_key: id = NSString::alloc(nil).init_str("NSScreenNumber");
-            let screen_number = device_description.objectForKey_(screen_number_key);
-            let screen_number: CGDirectDisplayID = msg_send![screen_number, unsignedIntegerValue];
-            Self(screen_number)
+            let screens: *mut Object = msg_send![class!(NSScreen), screens];
+            let screen: *mut Object = msg_send![screens, objectAtIndex: 0usize];
+            let device_description: *mut Object = msg_send![screen, deviceDescription];
+
+            let key = CString::new("NSScreenNumber").unwrap();
+            let ns_key: *mut Object = msg_send![class!(NSString), alloc];
+            let ns_key: *mut Object = msg_send![ns_key, initWithUTF8String: key.as_ptr()];
+
+            let screen_number_obj: *mut Object =
+                msg_send![device_description, objectForKey: ns_key];
+            let screen_number: u64 = msg_send![screen_number_obj, unsignedIntegerValue];
+            Self(screen_number as CGDirectDisplayID)
         }
     }
 

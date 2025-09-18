@@ -1,0 +1,73 @@
+# Auto-open a pull request into the default branch when a non-default branch is pushed.
+#
+# Requirements:
+# - Repository secret GITEA_TOKEN with API scope that can open PRs on this fork.
+# - Optional repository variable DEFAULT_BRANCH to override the default branch name (defaults to "main").
+
+name: Auto Open PRs
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - master
+  workflow_dispatch: {}
+
+jobs:
+  open-pr:
+    runs-on: docker
+    env:
+      DEFAULT_BRANCH: ${{ vars.DEFAULT_BRANCH || 'main' }}
+    steps:
+      - name: Derive server, repo, and branch
+        id: drv
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVER_URL="${GITHUB_SERVER_URL:-${GITEA_SERVER_URL:-}}"
+          REPO_PATH="${GITHUB_REPOSITORY:-${GITEA_REPOSITORY:-}}"
+          # Branch name from ref variables
+          BR="${GITHUB_REF_NAME:-${GITEA_REF_NAME:-}}"
+          if [ -z "$BR" ]; then
+            REF="${GITHUB_REF:-${GITEA_REF:-}}"
+            BR="${REF##refs/heads/}"
+          fi
+          if [ -z "$SERVER_URL" ] || [ -z "$REPO_PATH" ] || [ -z "$BR" ]; then
+            echo "Missing SERVER_URL, REPO_PATH or branch name from env." >&2
+            exit 1
+          fi
+          echo "SERVER_URL=$SERVER_URL"   >> "$GITHUB_OUTPUT"
+          echo "REPO_PATH=$REPO_PATH"     >> "$GITHUB_OUTPUT"
+          echo "PUSH_BRANCH=$BR"          >> "$GITHUB_OUTPUT"
+          echo "Default branch: $DEFAULT_BRANCH; Push branch: $BR" >&2
+
+      - name: Skip default branch
+        if: ${{ steps.drv.outputs.PUSH_BRANCH == env.DEFAULT_BRANCH }}
+        run: echo "Push to default branch; nothing to do." >&2
+
+      - name: Ensure PR exists or create
+        if: ${{ steps.drv.outputs.PUSH_BRANCH != env.DEFAULT_BRANCH }}
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          API_BASE="${{ steps.drv.outputs.SERVER_URL }}/api/v1"
+          REPO="${{ steps.drv.outputs.REPO_PATH }}"
+          BRANCH="${{ steps.drv.outputs.PUSH_BRANCH }}"
+          # Check existing open PRs for this head branch
+          PRS=$(curl -sfSL -H "Authorization: token ${GITEA_TOKEN}" "${API_BASE}/repos/${REPO}/pulls?state=open")
+          # Try to detect if a PR for this head exists (head_branch may be present; fallback to scanning title/body for branch string)
+          if echo "$PRS" | grep -q "\"head_branch\"\s*:\s*\"$BRANCH\""; then
+            echo "PR already open for $BRANCH; skipping." >&2
+            exit 0
+          fi
+          TITLE="Auto-PR: $BRANCH -> $DEFAULT_BRANCH"
+          BODY="Automatically opened pull request for branch $BRANCH into $DEFAULT_BRANCH."
+          JSON_PAYLOAD=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' \
+                                   "$TITLE" "$BODY" "$BRANCH" "$DEFAULT_BRANCH")
+          curl -sfSL -X POST \
+               -H "Content-Type: application/json" \
+               -H "Authorization: token ${GITEA_TOKEN}" \
+               "${API_BASE}/repos/${REPO}/pulls" \
+               -d "$JSON_PAYLOAD"
