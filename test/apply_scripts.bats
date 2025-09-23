@@ -103,7 +103,7 @@ EOF
   printf 'alpha\nbeta\ngamma\n' > README
   git add README
   git commit -qm 'Add gamma'
-  git format-patch -1 HEAD --stdout > \\
+  git format-patch -1 HEAD --stdout > \
     .reapply-patches/macOS-modernization/0001-add-gamma.patch
   git reset --hard HEAD^ >/dev/null
   printf 'alpha-upstream\nbeta\n' > README
