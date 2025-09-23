@@ -22,3 +22,4 @@ Documentation
   - How to generate new deltas and checkpoints
   - Worktree hygiene and porting this setup to other repos
   - Pre-push safeguards (CHECKPOINT + cumulative required; main protected to workflow-only changes)
+  - Testing (`script/test.sh`) and coverage hints (`kcov` support, offline vendored bats libraries)
