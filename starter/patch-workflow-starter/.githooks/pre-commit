@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Agentic pre-commit guard
+# - Prevents committing in the primary working tree; encourages using worktrees
+# - Hint: use `git wtn` / `git wta` to work in a branch-scoped worktree
+set -euo pipefail
+
+GIT_DIR=$(git rev-parse --git-dir)
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
+
+if [[ "${ALLOW_ROOT_COMMIT:-0}" != "1" ]] && [[ "$GIT_DIR" == "$GIT_COMMON_DIR" ]]; then
+  echo "[pre-commit] This appears to be the primary working tree (not a git worktree)." >&2
+  echo "Please create a worktree and commit from there (e.g., script/new-worktree.sh)." >&2
+  echo "Override by setting ALLOW_ROOT_COMMIT=1 if you really need to." >&2
+  exit 1
+fi
+
+exit 0

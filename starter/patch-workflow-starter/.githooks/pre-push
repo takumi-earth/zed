@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Agentic pre-push guard
+# - Validates patch series (CHECKPOINT + cumulative present)
+# - Protects main: only workflow files may change on pushes to main
+#
+# Bypass:
+# - Validation: ALLOW_PRE_PUSH_BYPASS=1
+# - Main workflow-only restriction: ALLOW_MAIN_CODE_PUSH=1
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+
+# 1) Patch series validation (quick fail if misconfigured)
+if [[ "${ALLOW_PRE_PUSH_BYPASS:-0}" != "1" ]]; then
+  SERIES="${PATCH_SERIES:-.reapply-patches/macOS-modernization}"
+  "$ROOT_DIR/script/validate-patch-setup.sh" --series "$SERIES"
+fi
+
+# 2) Protect main: limit changes to workflow-only files
+#    Parse refs from stdin: <local ref> <local sha> <remote ref> <remote sha>
+#    For each main ref, diff remote..local and ensure paths match allowlist.
+if [[ "${ALLOW_MAIN_CODE_PUSH:-0}" != "1" ]]; then
+  allow_re='^(\.reapply-patches/|script/|\.githooks/|docs/|test/|tooling/|\.github/workflows/|AGENTS\.md$)'
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    # Stop when no more refs (some Git versions pass nothing on dry runs)
+    [[ -z "${local_ref:-}" ]] && continue
+    # Sanitize refs to tolerate CRLF / pasted artifacts
+    if [[ -f "$ROOT_DIR/script/lib/sanitize.sh" ]]; then
+      # shellcheck source=/dev/null
+      . "$ROOT_DIR/script/lib/sanitize.sh"
+      local_ref=$(printf '%s' "$local_ref" | sanitize_line)
+      local_sha=$(printf '%s' "$local_sha" | sanitize_line)
+      remote_ref=$(printf '%s' "$remote_ref" | sanitize_line)
+      remote_sha=$(printf '%s' "$remote_sha" | sanitize_line)
+    fi
+    # Only check heads pushes that target main (either side)
+    case "$local_ref $remote_ref" in
+      refs/heads/main*|*refs/heads/main*)
+        # When remote_sha is all zeros, use upstream remote tip if available
+        base="$remote_sha"
+        if [[ "$remote_sha" =~ ^0+$ ]]; then
+          # Try origin/main; if unavailable, fall back to empty tree
+          if base=$(git rev-parse --quiet --verify origin/main); then :; else
+            base=$(git hash-object -t tree /dev/null)
+          fi
+        fi
+        # Compute changed files between base..local
+        changed=$(git diff --name-only "$base" "$local_sha" || true)
+        bad=()
+        while IFS= read -r f; do
+          [[ -z "$f" ]] && continue
+          if ! [[ "$f" =~ $allow_re ]]; then
+            bad+=("$f")
+          fi
+        done <<< "$changed"
+        if (( ${#bad[@]} > 0 )); then
+          echo "[pre-push] Refuses to push non-workflow changes to main:" >&2
+          printf '  %s\n' "${bad[@]}" >&2
+          echo "Set ALLOW_MAIN_CODE_PUSH=1 to bypass." >&2
+          exit 1
+        fi
+      ;;
+    esac
+  done
+fi
+
+exit 0
