@@ -50,6 +50,18 @@ Pre-push Validation
 - Override/advanced:
   - Use `PATCH_SERIES=/path/to/series git push` to validate a different series.
   - Bypass (rare): `ALLOW_PRE_PUSH_BYPASS=1 git push`.
+  - Main-only guard: `ALLOW_MAIN_CODE_PUSH=1 git push` to allow non-workflow changes on `main`.
+
+Testing & Coverage
+
+- Tests live in `test/` and run offline using the vendored `tooling/bats-core`, `tooling/bats-support`, and `tooling/bats-assert` libraries.
+- Run `script/test.sh` to execute the suite. If `kcov` is installed, coverage HTML is emitted to `target/kcov`.
+- Key scenarios covered:
+  - `validate-patch-setup.sh` success and failures (missing CHECKPOINT, malformed DATE/COVERS, malformed cumulative, inconsistent numbering, BOM/ZWSP/NBSP/CRLF sanitization).
+  - `.githooks/pre-push` allow/block behavior, `PATCH_SERIES` override, CRLF/ZWSP sanitization, and missing series.
+  - `.githooks/pre-commit` behavior with and without `ALLOW_ROOT_COMMIT`.
+  - `script/setup-repo.sh` hook/alias installation.
+  - `script/apply-cumulative.sh` in-place apply, `script/new-worktree-apply-cumulative.sh` auto-applying numbered patches and surfacing 3-way fallback conflicts.
 
 Typical Flows
 
