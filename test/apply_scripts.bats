@@ -91,7 +91,7 @@ add_line() {
   [ -f "$WT/FOO" ] && [ -f "$WT/BAR" ]
 }
 
-@test 'new-worktree-apply uses 3-way fallback for numbered patches' {
+@test 'new-worktree-apply triggers 3-way fallback on conflicting delta' {
   init_repo three-way
   cat > README <<'EOF'
 alpha
@@ -116,10 +116,9 @@ EOF
   git remote add upstream "$PWD/upstream.git"
   ALLOW_PRE_PUSH_BYPASS=1 ALLOW_MAIN_CODE_PUSH=1 git push upstream HEAD:main >/dev/null
   run script/new-worktree-apply-cumulative.sh
-  assert_success
-  WT=$(printf '%s' "$output" | sed -n 's/^WORKTREE=\(.*\)$/\1/p')
-  assert_file_contains "$WT/README" 'beta-upstream'
-  assert_file_contains "$WT/README" 'gamma'
+  assert_failure
+  assert_output --partial 'Falling back to patching base and 3-way merge'
+  assert_output --partial 'Merge conflict in README'
 }
 
 assert_file_contains() {
