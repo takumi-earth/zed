@@ -63,6 +63,14 @@ Testing & Coverage
   - `script/setup-repo.sh` hook/alias installation.
   - `script/apply-cumulative.sh` in-place apply, `script/new-worktree-apply-cumulative.sh` auto-applying numbered patches and surfacing 3-way fallback conflicts.
 
+Idempotence & Re-runs
+
+- `script/setup-repo.sh` (`git sts`) — **idempotent**; safe to run any time.
+- `git gstart` — creates a new worktree/branch every run; use `git wta --branch <name>` to reuse a specific branch.
+- `git wta` / `git gta` — create/apply on a new branch unless `--branch` targets an existing one.
+- `script/apply-cumulative.sh` — applies current checkpoint/deltas; repeat runs produce new commits only if content changed.
+- `script/cleanup-worktrees.sh` and `script/test.sh` — **idempotent**.
+
 Typical Flows
 
 - Fresh session, defaults end-to-end:
