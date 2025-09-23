@@ -21,7 +21,7 @@ fi
 #    Parse refs from stdin: <local ref> <local sha> <remote ref> <remote sha>
 #    For each main ref, diff remote..local and ensure paths match allowlist.
 if [[ "${ALLOW_MAIN_CODE_PUSH:-0}" != "1" ]]; then
-  allow_re='^(\.reapply-patches/|script/|\.githooks/|docs/|test/|tooling/|AGENTS\.md$)'
+  allow_re='^(\.reapply-patches/|script/|\.githooks/|docs/|test/|tooling/|\.github/workflows/|AGENTS\.md$)'
   while read -r local_ref local_sha remote_ref remote_sha; do
     # Stop when no more refs (some Git versions pass nothing on dry runs)
     [[ -z "${local_ref:-}" ]] && continue
