@@ -91,6 +91,35 @@ add_line() {
   [ -f "$WT/FOO" ] && [ -f "$WT/BAR" ]
 }
 
+@test 'new-worktree-apply auto-merges numbered patch via 3-way' {
+  init_repo three-way-success
+  make_cumulative_add_file CUMUL
+  cat > README <<'EOF'
+alpha
+beta
+EOF
+  git add README
+  git commit -qm base
+  printf 'alpha\nbeta\ngamma\n' > README
+  git add README
+  git commit -qm 'Add gamma'
+  git format-patch -1 HEAD --stdout > \\
+    .reapply-patches/macOS-modernization/0001-add-gamma.patch
+  git reset --hard HEAD^ >/dev/null
+  printf 'alpha-upstream\nbeta\n' > README
+  git add README
+  git commit -qm 'Upstream rename alpha'
+  mkdir -p upstream.git
+  git init -q --bare upstream.git
+  git remote add upstream "$PWD/upstream.git"
+  ALLOW_PRE_PUSH_BYPASS=1 ALLOW_MAIN_CODE_PUSH=1 git push upstream HEAD:main >/dev/null
+  run script/new-worktree-apply-cumulative.sh
+  assert_success
+  WT=$(printf '%s' "$output" | sed -n 's/^WORKTREE=\(.*\)$/\1/p')
+  assert_file_contains "$WT/README" 'alpha-upstream'
+  assert_file_contains "$WT/README" 'gamma'
+}
+
 @test 'new-worktree-apply triggers 3-way fallback on conflicting delta' {
   init_repo three-way
   cat > README <<'EOF'
