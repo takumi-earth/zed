@@ -1,0 +1,108 @@
+# Sync upstream main from the mirror into this fork, and open a PR when a fast-forward is not possible.
+#
+# Requirements (set in your fork repository settings):
+# - Repository secret GITEA_TOKEN with API scope that can push and open PRs on this fork.
+# - Repository secret UPSTREAM_REPO set to the path of the upstream mirror inside this Gitea instance,
+#   for example: "org/zed-mirror" (without .git).
+# - Optional repository variable DEFAULT_BRANCH to override the default branch name (defaults to "main").
+#
+# This workflow assumes the mirror repository (UPSTREAM_REPO) is already auto-synced from the real upstream.
+
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes
+  workflow_dispatch: {}
+
+jobs:
+  sync-upstream:
+    runs-on: docker
+    env:
+      DEFAULT_BRANCH: ${{ vars.DEFAULT_BRANCH || 'main' }}
+    steps:
+      - name: Derive server and repo
+        id: drv
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer GitHub-compatible vars provided by Gitea Actions, fallback to Gitea-specific ones
+          SERVER_URL="${GITHUB_SERVER_URL:-${GITEA_SERVER_URL:-}}"
+          REPO_PATH="${GITHUB_REPOSITORY:-${GITEA_REPOSITORY:-}}"
+          if [ -z "$SERVER_URL" ] || [ -z "$REPO_PATH" ]; then
+            echo "Missing SERVER_URL or REPO_PATH from env (GITHUB_* or GITEA_*)" >&2
+            exit 1
+          fi
+          echo "SERVER_URL=$SERVER_URL" >> "$GITHUB_OUTPUT"
+          echo "REPO_PATH=$REPO_PATH"   >> "$GITHUB_OUTPUT"
+
+      - name: Prepare repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init sync-work
+          cd sync-work
+          git config user.name  "gitea-actions"
+          git config user.email "actions@localhost"
+          ORIGIN_URL="${{ steps.drv.outputs.SERVER_URL }}/${{ steps.drv.outputs.REPO_PATH }}.git"
+          git remote add origin "$ORIGIN_URL"
+          git fetch --prune origin
+          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH" || git checkout -B "$DEFAULT_BRANCH"
+
+      - name: Add upstream and fetch
+        shell: bash
+        env:
+          UPSTREAM_REPO: ${{ secrets.UPSTREAM_REPO }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UPSTREAM_REPO:-}" ]; then
+            echo "Secret UPSTREAM_REPO not set (expected '<owner>/<repo>')" >&2
+            exit 1
+          fi
+          cd sync-work
+          UPSTREAM_URL="${{ steps.drv.outputs.SERVER_URL }}/$UPSTREAM_REPO.git"
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream "$UPSTREAM_URL"
+          else
+            git remote add upstream "$UPSTREAM_URL"
+          fi
+          git fetch --prune upstream
+
+      - name: Fast-forward or open PR
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd sync-work
+          if git merge --ff-only "upstream/$DEFAULT_BRANCH"; then
+            echo "Fast-forward merge succeeded. Pushing main." >&2
+            git push origin "$DEFAULT_BRANCH"
+            exit 0
+          fi
+
+          # Create a sync branch with a regular merge (may leave conflicts to be resolved in PR)
+          BR="sync/upstream-$(date -u +%Y%m%d%H%M%S)"
+          git checkout -B "$BR"
+          set +e
+          git merge "upstream/$DEFAULT_BRANCH"
+          MERGE_STATUS=$?
+          set -e
+          git push -u origin "$BR"
+
+          # Open a PR into main on this fork
+          if [ -z "${GITEA_TOKEN:-}" ]; then
+            echo "Secret GITEA_TOKEN not set; cannot open PR automatically." >&2
+            exit 0
+          fi
+          API_BASE="${{ steps.drv.outputs.SERVER_URL }}/api/v1"
+          REPO="${{ steps.drv.outputs.REPO_PATH }}"
+          TITLE="Sync upstream into $DEFAULT_BRANCH ($BR)"
+          BODY="Upstream: ${{ secrets.UPSTREAM_REPO }} | Branch: $BR | Merge status: $MERGE_STATUS"
+          JSON_PAYLOAD=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' \
+                                   "$TITLE" "$BODY" "$BR" "$DEFAULT_BRANCH")
+          curl -sfSL -X POST \
+               -H "Content-Type: application/json" \
+               -H "Authorization: token ${GITEA_TOKEN}" \
+               "${API_BASE}/repos/${REPO}/pulls" \
+               -d "$JSON_PAYLOAD"
