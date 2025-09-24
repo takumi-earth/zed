@@ -61,11 +61,8 @@ macro_rules! id_type {
             }
         }
 
-        impl sea_orm::sea_query::Nullable for $name {
-            fn null() -> Value {
-                Value::Int(None)
-            }
-        }
+        // Nullable is provided by sea-orm derives for value types in recent versions;
+        // avoid conflicting implementations here.
     };
 }
 

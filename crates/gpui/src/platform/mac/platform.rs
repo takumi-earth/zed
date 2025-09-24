@@ -1,6 +1,6 @@
 use super::{
     BoolExt, MacKeyboardLayout, MacKeyboardMapper,
-    attributed_string::{NSAttributedString, NSMutableAttributedString},
+    attributed_string::{NSAttributedString, NSMutableAttributedString, NSRange},
     events::key_to_native,
     renderer,
 };
@@ -17,13 +17,11 @@ use block::ConcreteBlock;
 use cocoa::{
     appkit::{
         NSApplication, NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular,
-        NSEventModifierFlags, NSMenu, NSMenuItem, NSModalResponse, NSOpenPanel, NSPasteboard,
-        NSPasteboardTypePNG, NSPasteboardTypeRTF, NSPasteboardTypeRTFD, NSPasteboardTypeString,
-        NSPasteboardTypeTIFF, NSSavePanel, NSWindow,
+        NSEventModifierFlags, NSPasteboard, NSWindow,
     },
     base::{BOOL, NO, YES, id, nil, selector},
     foundation::{
-        NSArray, NSAutoreleasePool, NSBundle, NSData, NSInteger, NSProcessInfo, NSRange, NSString,
+        NSArray, NSAutoreleasePool, NSBundle, NSData, NSInteger, NSProcessInfo, NSString,
         NSUInteger, NSURL,
     },
 };
@@ -37,6 +35,10 @@ use core_foundation::{
 };
 use ctor::ctor;
 use futures::channel::oneshot;
+use icrate::AppKit::{
+    NSPasteboardTypePNG, NSPasteboardTypeRTF, NSPasteboardTypeRTFD, NSPasteboardTypeString,
+    NSPasteboardTypeTIFF, NSScrollerStyleOverlay,
+};
 use itertools::Itertools;
 use objc::{
     class,
@@ -45,7 +47,108 @@ use objc::{
     runtime::{Class, Object, Sel},
     sel, sel_impl,
 };
+// objc2 typed migration will be introduced incrementally in focused sections.
+// Swift C-ABI functions provided by the macOS AppKit shim
 use parking_lot::Mutex;
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn zed_register_menu_handler();
+    fn zed_set_main_menu_json(json: *const ::std::os::raw::c_char);
+    fn zed_open_panel(request_id: u64, json: *const ::std::os::raw::c_char);
+    fn zed_save_panel(request_id: u64, json: *const ::std::os::raw::c_char);
+    fn zed_pasteboard_write_text(text: *const ::std::os::raw::c_char);
+    fn zed_pasteboard_write_image(bytes: *const u8, len: usize, uti: *const ::std::os::raw::c_char);
+    fn zed_pasteboard_read_image(
+        uti: *const ::std::os::raw::c_char,
+        out_len: *mut usize,
+    ) -> *mut u8;
+}
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_menu_action(tag: u64) {
+    unsafe {
+        let app: id = msg_send![APP_CLASS, sharedApplication];
+        let app_obj: &mut Object = &mut *app;
+        let platform = get_mac_platform(app_obj);
+        let mut lock = platform.0.lock();
+        if let Some(mut callback) = lock.menu_command.take() {
+            let index = tag as usize;
+            if let Some(action) = lock.menu_actions.get(index) {
+                let action = action.boxed_clone();
+                drop(lock);
+                callback(action.as_ref());
+                platform.0.lock().menu_command.get_or_insert(callback);
+                return;
+            }
+            // Put the callback back even if we did not find an action
+            platform.0.lock().menu_command.get_or_insert(callback);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_validate_menu_action(tag: u64) -> bool {
+    unsafe {
+        let app: id = msg_send![APP_CLASS, sharedApplication];
+        let app_obj: &mut Object = &mut *app;
+        let platform = get_mac_platform(app_obj);
+        let mut lock = platform.0.lock();
+        if let Some(mut callback) = lock.validate_menu_command.take() {
+            let index = tag as usize;
+            if let Some(action) = lock.menu_actions.get(index) {
+                let action = action.boxed_clone();
+                drop(lock);
+                let result = callback(action.as_ref());
+                platform
+                    .0
+                    .lock()
+                    .validate_menu_command
+                    .get_or_insert(callback);
+                return result;
+            }
+            platform
+                .0
+                .lock()
+                .validate_menu_command
+                .get_or_insert(callback);
+        }
+        // Default to enabled when no validator is registered or tag not found
+        true
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_menu_will_open() {
+    unsafe {
+        let app: id = msg_send![APP_CLASS, sharedApplication];
+        let app_obj: &mut Object = &mut *app;
+        let platform = get_mac_platform(app_obj);
+        if let Some(mut callback) = platform.0.lock().will_open_menu.take() {
+            callback();
+            platform.0.lock().will_open_menu.get_or_insert(callback);
+        }
+    }
+}
+
+// Expose a dispatcher for status item menus to reuse the same app-level menu callback
+pub(crate) fn dispatch_menu_action(action: &dyn crate::Action) {
+    unsafe {
+        let app: id = msg_send![APP_CLASS, sharedApplication];
+        let app_obj: &mut Object = &mut *app;
+        let platform = get_mac_platform(app_obj);
+        let mut lock = platform.0.lock();
+        if let Some(mut callback) = lock.menu_command.take() {
+            let act = action.boxed_clone();
+            drop(lock);
+            callback(act.as_ref());
+            platform.0.lock().menu_command.get_or_insert(callback);
+        }
+    }
+}
+
+// (Status item click callback is exported by status_item.rs)
 use ptr::null_mut;
 use std::{
     cell::Cell,
@@ -232,6 +335,8 @@ impl MacPlatform {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[allow(dead_code)]
     unsafe fn create_menu_bar(
         &self,
         menus: &Vec<Menu>,
@@ -240,32 +345,31 @@ impl MacPlatform {
         keymap: &Keymap,
     ) -> id {
         unsafe {
-            let application_menu = NSMenu::new(nil).autorelease();
-            application_menu.setDelegate_(delegate);
+            let mut application_menu: id = msg_send![class!(NSMenu), new];
+            application_menu = msg_send![application_menu, autorelease];
+            let _: () = msg_send![application_menu, setDelegate: delegate];
 
             for menu_config in menus {
-                let menu = NSMenu::new(nil).autorelease();
+                let mut menu: id = msg_send![class!(NSMenu), new];
+                menu = msg_send![menu, autorelease];
                 let menu_title = ns_string(&menu_config.name);
-                menu.setTitle_(menu_title);
-                menu.setDelegate_(delegate);
+                let _: () = msg_send![menu, setTitle: menu_title];
+                let _: () = msg_send![menu, setDelegate: delegate];
 
                 for item_config in &menu_config.items {
-                    menu.addItem_(Self::create_menu_item(
-                        item_config,
-                        delegate,
-                        actions,
-                        keymap,
-                    ));
+                    Self::add_menu_item(menu, item_config, delegate, actions, keymap);
                 }
 
-                let menu_item = NSMenuItem::new(nil).autorelease();
-                menu_item.setTitle_(menu_title);
-                menu_item.setSubmenu_(menu);
-                application_menu.addItem_(menu_item);
+                let mut menu_item: id = msg_send![class!(NSMenuItem), alloc];
+                menu_item = msg_send![menu_item, init];
+                menu_item = msg_send![menu_item, autorelease];
+                let _: () = msg_send![menu_item, setTitle: menu_title];
+                let _: () = msg_send![menu_item, setSubmenu: menu];
+                let _: () = msg_send![application_menu, addItem: menu_item];
 
                 if menu_config.name == "Window" {
                     let app: id = msg_send![APP_CLASS, sharedApplication];
-                    app.setWindowsMenu_(menu);
+                    let _: () = msg_send![app, setWindowsMenu: menu];
                 }
             }
 
@@ -281,21 +385,170 @@ impl MacPlatform {
         keymap: &Keymap,
     ) -> id {
         unsafe {
-            let dock_menu = NSMenu::new(nil);
-            dock_menu.setDelegate_(delegate);
+            let dock_menu: id = msg_send![class!(NSMenu), new];
+            let _: () = msg_send![dock_menu, setDelegate: delegate];
             for item_config in menu_items {
-                dock_menu.addItem_(Self::create_menu_item(
-                    &item_config,
-                    delegate,
-                    actions,
-                    keymap,
-                ));
+                Self::add_menu_item(dock_menu, &item_config, delegate, actions, keymap);
             }
 
             dock_menu
         }
     }
 
+    unsafe fn add_menu_item(
+        parent_menu: id,
+        item: &MenuItem,
+        delegate: id,
+        actions: &mut Vec<Box<dyn Action>>,
+        keymap: &Keymap,
+    ) {
+        static DEFAULT_CONTEXT: OnceLock<Vec<KeyContext>> = OnceLock::new();
+
+        unsafe {
+            match item {
+                MenuItem::Separator => {
+                    let sep: id = msg_send![class!(NSMenuItem), separatorItem];
+                    let _: () = msg_send![parent_menu, addItem: sep];
+                }
+                MenuItem::Action {
+                    name,
+                    action,
+                    os_action,
+                } => {
+                    let keystrokes = keymap
+                        .bindings_for_action(action.as_ref())
+                        .find_or_first(|binding| {
+                            binding.predicate().is_none_or(|predicate| {
+                                predicate.eval(DEFAULT_CONTEXT.get_or_init(|| {
+                                    let mut workspace_context = KeyContext::new_with_defaults();
+                                    workspace_context.add("Workspace");
+                                    let mut pane_context = KeyContext::new_with_defaults();
+                                    pane_context.add("Pane");
+                                    let mut editor_context = KeyContext::new_with_defaults();
+                                    editor_context.add("Editor");
+
+                                    pane_context.extend(&editor_context);
+                                    workspace_context.extend(&pane_context);
+                                    vec![workspace_context]
+                                }))
+                            })
+                        })
+                        .map(|binding| binding.keystrokes());
+
+                    let selector = match os_action {
+                        Some(crate::OsAction::Cut) => selector("cut:"),
+                        Some(crate::OsAction::Copy) => selector("copy:"),
+                        Some(crate::OsAction::Paste) => selector("paste:"),
+                        Some(crate::OsAction::SelectAll) => selector("selectAll:"),
+                        Some(crate::OsAction::Undo) => selector("handleGPUIMenuItem:"),
+                        Some(crate::OsAction::Redo) => selector("handleGPUIMenuItem:"),
+                        None => selector("handleGPUIMenuItem:"),
+                    };
+
+                    let item: id = if let Some(keystrokes) = keystrokes {
+                        if keystrokes.len() == 1 {
+                            let keystroke = &keystrokes[0];
+                            let mut mask = NSEventModifierFlags::empty();
+                            for (modifier, flag) in &[
+                                (
+                                    keystroke.modifiers().platform,
+                                    NSEventModifierFlags::NSCommandKeyMask,
+                                ),
+                                (
+                                    keystroke.modifiers().control,
+                                    NSEventModifierFlags::NSControlKeyMask,
+                                ),
+                                (
+                                    keystroke.modifiers().alt,
+                                    NSEventModifierFlags::NSAlternateKeyMask,
+                                ),
+                                (
+                                    keystroke.modifiers().shift,
+                                    NSEventModifierFlags::NSShiftKeyMask,
+                                ),
+                            ] {
+                                if *modifier {
+                                    mask |= *flag;
+                                }
+                            }
+
+                            let mut tmp: id = msg_send![class!(NSMenuItem), alloc];
+                            tmp = msg_send![
+                                tmp,
+                                initWithTitle: ns_string(name)
+                                action: selector
+                                keyEquivalent: ns_string(key_to_native(keystroke.key()).as_ref())
+                            ];
+                            let item: id = msg_send![tmp, autorelease];
+                            if Self::os_version() >= SemanticVersion::new(12, 0, 0) {
+                                let _: () = msg_send![item, setAllowsAutomaticKeyEquivalentLocalization: NO];
+                            }
+                            let _: () = msg_send![item, setKeyEquivalentModifierMask: mask];
+                            item
+                        } else {
+                            let mut tmp: id = msg_send![class!(NSMenuItem), alloc];
+                            tmp = msg_send![
+                                tmp,
+                                initWithTitle: ns_string(name)
+                                action: selector
+                                keyEquivalent: ns_string("")
+                            ];
+                            msg_send![tmp, autorelease]
+                        }
+                    } else {
+                        let mut tmp: id = msg_send![class!(NSMenuItem), alloc];
+                        tmp = msg_send![
+                            tmp,
+                            initWithTitle: ns_string(name)
+                            action: selector
+                            keyEquivalent: ns_string("")
+                        ];
+                        msg_send![tmp, autorelease]
+                    };
+
+                    let tag = actions.len() as NSInteger;
+                    let _: () = msg_send![item, setTag: tag];
+                    actions.push(action.boxed_clone());
+                    let _: () = msg_send![parent_menu, addItem: item];
+                }
+                MenuItem::Submenu(Menu { name, items }) => {
+                    let mut item: id = msg_send![class!(NSMenuItem), alloc];
+                    item = msg_send![item, init];
+                    item = msg_send![item, autorelease];
+                    let mut submenu: id = msg_send![class!(NSMenu), new];
+                    submenu = msg_send![submenu, autorelease];
+                    let _: () = msg_send![submenu, setDelegate: delegate];
+                    for subitem in items {
+                        Self::add_menu_item(submenu, subitem, delegate, actions, keymap);
+                    }
+                    let _: () = msg_send![item, setSubmenu: submenu];
+                    let _: () = msg_send![item, setTitle: ns_string(name)];
+                    let _: () = msg_send![parent_menu, addItem: item];
+                }
+                MenuItem::SystemMenu(OsMenu { name, menu_type }) => {
+                    let mut item: id = msg_send![class!(NSMenuItem), alloc];
+                    item = msg_send![item, init];
+                    item = msg_send![item, autorelease];
+                    let mut submenu: id = msg_send![class!(NSMenu), new];
+                    submenu = msg_send![submenu, autorelease];
+                    let _: () = msg_send![submenu, setDelegate: delegate];
+                    let _: () = msg_send![item, setSubmenu: submenu];
+                    let _: () = msg_send![item, setTitle: ns_string(name)];
+
+                    match menu_type {
+                        SystemMenuType::Services => {
+                            let app: id = msg_send![APP_CLASS, sharedApplication];
+                            let _: () = msg_send![app, setServicesMenu: item];
+                        }
+                    }
+
+                    let _: () = msg_send![parent_menu, addItem: item];
+                }
+            }
+        }
+    }
+    // Legacy helper removed; use add_menu_item instead
+    /*
     unsafe fn create_menu_item(
         item: &MenuItem,
         delegate: id,
@@ -306,7 +559,7 @@ impl MacPlatform {
 
         unsafe {
             match item {
-                MenuItem::Separator => NSMenuItem::separatorItem(nil),
+                MenuItem::Separator => msg_send![class!(NSMenuItem), separatorItem],
                 MenuItem::Action {
                     name,
                     action,
@@ -347,7 +600,7 @@ impl MacPlatform {
                         None => selector("handleGPUIMenuItem:"),
                     };
 
-                    let item;
+                    let mut item: id;
                     if let Some(keystrokes) = keystrokes {
                         if keystrokes.len() == 1 {
                             let keystroke = &keystrokes[0];
@@ -375,34 +628,37 @@ impl MacPlatform {
                                 }
                             }
 
-                            item = NSMenuItem::alloc(nil)
-                                .initWithTitle_action_keyEquivalent_(
-                                    ns_string(name),
-                                    selector,
-                                    ns_string(key_to_native(keystroke.key()).as_ref()),
-                                )
-                                .autorelease();
+                            let mut tmp: id = msg_send![class!(NSMenuItem), alloc];
+                            tmp = msg_send![
+                                tmp,
+                                initWithTitle: ns_string(name)
+                                action: selector
+                                keyEquivalent: ns_string(key_to_native(keystroke.key()).as_ref())
+                            ];
+                            item = msg_send![tmp, autorelease];
                             if Self::os_version() >= SemanticVersion::new(12, 0, 0) {
                                 let _: () = msg_send![item, setAllowsAutomaticKeyEquivalentLocalization: NO];
                             }
-                            item.setKeyEquivalentModifierMask_(mask);
+                            let _: () = msg_send![item, setKeyEquivalentModifierMask: mask];
                         } else {
-                            item = NSMenuItem::alloc(nil)
-                                .initWithTitle_action_keyEquivalent_(
-                                    ns_string(name),
-                                    selector,
-                                    ns_string(""),
-                                )
-                                .autorelease();
+                            let mut tmp: id = msg_send![class!(NSMenuItem), alloc];
+                            tmp = msg_send![
+                                tmp,
+                                initWithTitle: ns_string(name)
+                                action: selector
+                                keyEquivalent: ns_string("")
+                            ];
+                            item = msg_send![tmp, autorelease];
                         }
                     } else {
-                        item = NSMenuItem::alloc(nil)
-                            .initWithTitle_action_keyEquivalent_(
-                                ns_string(name),
-                                selector,
-                                ns_string(""),
-                            )
-                            .autorelease();
+                        let mut tmp: id = msg_send![class!(NSMenuItem), alloc];
+                        tmp = msg_send![
+                            tmp,
+                            initWithTitle: ns_string(name)
+                            action: selector
+                            keyEquivalent: ns_string("")
+                        ];
+                        item = msg_send![tmp, autorelease];
                     }
 
                     let tag = actions.len() as NSInteger;
@@ -411,27 +667,33 @@ impl MacPlatform {
                     item
                 }
                 MenuItem::Submenu(Menu { name, items }) => {
-                    let item = NSMenuItem::new(nil).autorelease();
-                    let submenu = NSMenu::new(nil).autorelease();
-                    submenu.setDelegate_(delegate);
+                    let mut item: id = msg_send![class!(NSMenuItem), alloc];
+                    item = msg_send![item, init];
+                    item = msg_send![item, autorelease];
+                    let mut submenu: id = msg_send![class!(NSMenu), new];
+                    submenu = msg_send![submenu, autorelease];
+                    let _: () = msg_send![submenu, setDelegate: delegate];
                     for item in items {
-                        submenu.addItem_(Self::create_menu_item(item, delegate, actions, keymap));
+                        let _: () = msg_send![submenu, addItem: Self::create_menu_item(item, delegate, actions, keymap)];
                     }
-                    item.setSubmenu_(submenu);
-                    item.setTitle_(ns_string(name));
+                    let _: () = msg_send![item, setSubmenu: submenu];
+                    let _: () = msg_send![item, setTitle: ns_string(name)];
                     item
                 }
                 MenuItem::SystemMenu(OsMenu { name, menu_type }) => {
-                    let item = NSMenuItem::new(nil).autorelease();
-                    let submenu = NSMenu::new(nil).autorelease();
-                    submenu.setDelegate_(delegate);
-                    item.setSubmenu_(submenu);
-                    item.setTitle_(ns_string(name));
+                    let mut item: id = msg_send![class!(NSMenuItem), alloc];
+                    item = msg_send![item, init];
+                    item = msg_send![item, autorelease];
+                    let mut submenu: id = msg_send![class!(NSMenu), new];
+                    submenu = msg_send![submenu, autorelease];
+                    let _: () = msg_send![submenu, setDelegate: delegate];
+                    let _: () = msg_send![item, setSubmenu: submenu];
+                    let _: () = msg_send![item, setTitle: ns_string(name)];
 
                     match menu_type {
                         SystemMenuType::Services => {
                             let app: id = msg_send![APP_CLASS, sharedApplication];
-                            app.setServicesMenu_(item);
+                            let _: () = msg_send![app, setServicesMenu: item];
                         }
                     }
 
@@ -440,6 +702,7 @@ impl MacPlatform {
             }
         }
     }
+    */
 
     fn os_version() -> SemanticVersion {
         let version = unsafe {
@@ -593,7 +856,12 @@ impl Platform for MacPlatform {
 
     #[cfg(feature = "screen-capture")]
     fn is_screen_capture_supported(&self) -> bool {
-        let min_version = cocoa::foundation::NSOperatingSystemVersion::new(12, 3, 0);
+        use icrate::Foundation::NSOperatingSystemVersion;
+        let min_version = NSOperatingSystemVersion {
+            majorVersion: 12,
+            minorVersion: 3,
+            patchVersion: 0,
+        };
         super::is_macos_version_at_least(min_version)
     }
 
@@ -703,50 +971,51 @@ impl Platform for MacPlatform {
         &self,
         options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
-        let (done_tx, done_rx) = oneshot::channel();
-        self.foreground_executor()
-            .spawn(async move {
-                unsafe {
-                    let panel = NSOpenPanel::openPanel(nil);
-                    panel.setCanChooseDirectories_(options.directories.to_objc());
-                    panel.setCanChooseFiles_(options.files.to_objc());
-                    panel.setAllowsMultipleSelection_(options.multiple.to_objc());
+        #[cfg(target_os = "macos")]
+        {
+            use std::collections::HashMap;
+            use std::sync::{Mutex as StdMutex, OnceLock};
+            type OpenTx = oneshot::Sender<Result<Option<Vec<PathBuf>>>>;
+            static OPEN_SENDERS: OnceLock<StdMutex<HashMap<u64, OpenTx>>> = OnceLock::new();
+            static REQ_COUNTER: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
 
-                    panel.setCanCreateDirectories(true.to_objc());
-                    panel.setResolvesAliases_(false.to_objc());
-                    let done_tx = Cell::new(Some(done_tx));
-                    let block = ConcreteBlock::new(move |response: NSModalResponse| {
-                        let result = if response == NSModalResponse::NSModalResponseOk {
-                            let mut result = Vec::new();
-                            let urls = panel.URLs();
-                            for i in 0..urls.count() {
-                                let url = urls.objectAtIndex(i);
-                                if url.isFileURL() == YES
-                                    && let Ok(path) = ns_url_to_path(url)
-                                {
-                                    result.push(path)
-                                }
-                            }
-                            Some(result)
-                        } else {
-                            None
-                        };
+            #[derive(serde::Serialize)]
+            struct OpenOpts {
+                directories: bool,
+                files: bool,
+                multiple: bool,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                prompt: Option<String>,
+            }
 
-                        if let Some(done_tx) = done_tx.take() {
-                            let _ = done_tx.send(Ok(result));
-                        }
-                    });
-                    let block = block.copy();
+            let (tx, rx) = oneshot::channel();
+            let req_id = REQ_COUNTER
+                .get_or_init(|| std::sync::atomic::AtomicU64::new(1))
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            OPEN_SENDERS
+                .get_or_init(|| StdMutex::new(HashMap::new()))
+                .lock()
+                .unwrap()
+                .insert(req_id, tx);
 
-                    if let Some(prompt) = options.prompt {
-                        let _: () = msg_send![panel, setPrompt: ns_string(&prompt)];
-                    }
+            let opts = OpenOpts {
+                directories: options.directories,
+                files: options.files,
+                multiple: options.multiple,
+                prompt: options.prompt.as_deref().map(|s| s.to_string()),
+            };
+            let json = serde_json::to_string(&opts).unwrap_or_else(|_| "{}".into());
+            if let Ok(cjson) = std::ffi::CString::new(json) {
+                unsafe { zed_open_panel(req_id, cjson.as_ptr()) };
+            }
 
-                    let _: () = msg_send![panel, beginWithCompletionHandler: block];
-                }
-            })
-            .detach();
-        done_rx
+            return rx;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let (_tx, rx) = oneshot::channel();
+            rx
+        }
     }
 
     fn prompt_for_new_path(
@@ -754,71 +1023,46 @@ impl Platform for MacPlatform {
         directory: &Path,
         suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
-        let directory = directory.to_owned();
-        let suggested_name = suggested_name.map(|s| s.to_owned());
-        let (done_tx, done_rx) = oneshot::channel();
-        self.foreground_executor()
-            .spawn(async move {
-                unsafe {
-                    let panel = NSSavePanel::savePanel(nil);
-                    let path = ns_string(directory.to_string_lossy().as_ref());
-                    let url = NSURL::fileURLWithPath_isDirectory_(nil, path, true.to_objc());
-                    panel.setDirectoryURL(url);
+        #[cfg(target_os = "macos")]
+        {
+            use std::collections::HashMap;
+            use std::sync::{Mutex as StdMutex, OnceLock};
+            type SaveTx = oneshot::Sender<Result<Option<PathBuf>>>;
+            static SAVE_SENDERS: OnceLock<StdMutex<HashMap<u64, SaveTx>>> = OnceLock::new();
+            static REQ_COUNTER: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+            #[derive(serde::Serialize)]
+            struct SaveOpts<'a> {
+                directory: &'a str,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                suggested_name: Option<&'a str>,
+            }
 
-                    if let Some(suggested_name) = suggested_name {
-                        let name_string = ns_string(&suggested_name);
-                        let _: () = msg_send![panel, setNameFieldStringValue: name_string];
-                    }
+            let (tx, rx) = oneshot::channel();
+            let req_id = REQ_COUNTER
+                .get_or_init(|| std::sync::atomic::AtomicU64::new(1))
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            SAVE_SENDERS
+                .get_or_init(|| StdMutex::new(HashMap::new()))
+                .lock()
+                .unwrap()
+                .insert(req_id, tx);
 
-                    let done_tx = Cell::new(Some(done_tx));
-                    let block = ConcreteBlock::new(move |response: NSModalResponse| {
-                        let mut result = None;
-                        if response == NSModalResponse::NSModalResponseOk {
-                            let url = panel.URL();
-                            if url.isFileURL() == YES {
-                                result = ns_url_to_path(panel.URL()).ok().map(|mut result| {
-                                    let Some(filename) = result.file_name() else {
-                                        return result;
-                                    };
-                                    let chunks = filename
-                                        .as_bytes()
-                                        .split(|&b| b == b'.')
-                                        .collect::<Vec<_>>();
-
-                                    // https://github.com/zed-industries/zed/issues/16969
-                                    // Workaround a bug in macOS Sequoia that adds an extra file-extension
-                                    // sometimes. e.g. `a.sql` becomes `a.sql.s` or `a.txtx` becomes `a.txtx.txt`
-                                    //
-                                    // This is conditional on OS version because I'd like to get rid of it, so that
-                                    // you can manually create a file called `a.sql.s`. That said it seems better
-                                    // to break that use-case than breaking `a.sql`.
-                                    if chunks.len() == 3
-                                        && chunks[1].starts_with(chunks[2])
-                                        && Self::os_version() >= SemanticVersion::new(15, 0, 0)
-                                    {
-                                        let new_filename = OsStr::from_bytes(
-                                            &filename.as_bytes()
-                                                [..chunks[0].len() + 1 + chunks[1].len()],
-                                        )
-                                        .to_owned();
-                                        result.set_file_name(&new_filename);
-                                    }
-                                    result
-                                })
-                            }
-                        }
-
-                        if let Some(done_tx) = done_tx.take() {
-                            let _ = done_tx.send(Ok(result));
-                        }
-                    });
-                    let block = block.copy();
-                    let _: () = msg_send![panel, beginWithCompletionHandler: block];
-                }
-            })
-            .detach();
-
-        done_rx
+            let dir_str = directory.to_string_lossy().to_string();
+            let opts = SaveOpts {
+                directory: &dir_str,
+                suggested_name,
+            };
+            let json = serde_json::to_string(&opts).unwrap_or_else(|_| "{}".into());
+            if let Ok(cjson) = std::ffi::CString::new(json) {
+                unsafe { zed_save_panel(req_id, cjson.as_ptr()) };
+            }
+            return rx;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let (_tx, rx) = oneshot::channel();
+            rx
+        }
     }
 
     fn can_select_mixed_files_and_dirs(&self) -> bool {
@@ -901,15 +1145,159 @@ impl Platform for MacPlatform {
     }
 
     fn set_menus(&self, menus: Vec<Menu>, keymap: &Keymap) {
-        unsafe {
-            let app: id = msg_send![APP_CLASS, sharedApplication];
+        // Swift-native path: full JSON menu with action tags and shortcuts.
+        #[cfg(target_os = "macos")]
+        {
+            #[derive(serde::Serialize)]
+            #[serde(tag = "kind", rename_all = "lowercase")]
+            enum JsItem<'a> {
+                Action {
+                    title: &'a str,
+                    tag: u64,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    key_equivalent: Option<String>,
+                    #[serde(skip_serializing_if = "Vec::is_empty")]
+                    modifiers: Vec<&'static str>,
+                },
+                Separator,
+                Submenu {
+                    title: &'a str,
+                    items: Vec<JsItem<'a>>,
+                },
+                System {
+                    title: &'a str,
+                    system_type: &'static str,
+                    items: Vec<JsItem<'a>>,
+                },
+            }
+            #[derive(serde::Serialize)]
+            struct JsMenu<'a> {
+                title: &'a str,
+                items: Vec<JsItem<'a>>,
+            }
+            #[derive(serde::Serialize)]
+            struct JsSpec<'a> {
+                menus: Vec<JsMenu<'a>>,
+            }
+
             let mut state = self.0.lock();
+            state.menu_actions.clear();
             let actions = &mut state.menu_actions;
-            let menu = self.create_menu_bar(&menus, NSWindow::delegate(app), actions, keymap);
-            drop(state);
-            app.setMainMenu_(menu);
+
+            fn action_shortcut(
+                action: &dyn Action,
+                keymap: &Keymap,
+            ) -> (Option<String>, Vec<&'static str>) {
+                use crate::KeyContext;
+                let mut workspace_context = KeyContext::new_with_defaults();
+                workspace_context.add("Workspace");
+                let mut pane_context = KeyContext::new_with_defaults();
+                pane_context.add("Pane");
+                let mut editor_context = KeyContext::new_with_defaults();
+                editor_context.add("Editor");
+                pane_context.extend(&editor_context);
+                workspace_context.extend(&pane_context);
+                let default_contexts = vec![workspace_context];
+                let keystrokes = keymap
+                    .bindings_for_action(action)
+                    .find_or_first(|binding| {
+                        binding
+                            .predicate()
+                            .is_none_or(|p| p.eval(&default_contexts))
+                    })
+                    .map(|binding| binding.keystrokes());
+                if let Some(ks) = keystrokes {
+                    if ks.len() == 1 {
+                        let k = &ks[0];
+                        let key = key_to_native(k.key()).to_string();
+                        let mut mods = Vec::new();
+                        if k.modifiers().platform {
+                            mods.push("command");
+                        }
+                        if k.modifiers().control {
+                            mods.push("control");
+                        }
+                        if k.modifiers().alt {
+                            mods.push("option");
+                        }
+                        if k.modifiers().shift {
+                            mods.push("shift");
+                        }
+                        return (Some(key), mods);
+                    }
+                }
+                (None, Vec::new())
+            }
+
+            fn encode_items<'a>(
+                src: &'a [MenuItem],
+                keymap: &Keymap,
+                actions: &mut Vec<Box<dyn Action>>,
+                out: &mut Vec<JsItem<'a>>,
+            ) {
+                for item in src {
+                    match item {
+                        MenuItem::Separator => out.push(JsItem::Separator),
+                        MenuItem::Action { name, action, .. } => {
+                            let tag = actions.len() as u64;
+                            actions.push(action.boxed_clone());
+                            let (key, mods) = action_shortcut(action.as_ref(), keymap);
+                            out.push(JsItem::Action {
+                                title: name,
+                                tag,
+                                key_equivalent: key,
+                                modifiers: mods,
+                            });
+                        }
+                        MenuItem::Submenu(Menu { name, items }) => {
+                            let mut sub = Vec::new();
+                            encode_items(items, keymap, actions, &mut sub);
+                            out.push(JsItem::Submenu {
+                                title: name,
+                                items: sub,
+                            });
+                        }
+                        MenuItem::SystemMenu(OsMenu { name, menu_type }) => {
+                            let mut sub = Vec::new();
+                            let system_type = match menu_type {
+                                SystemMenuType::Services => "services",
+                            };
+                            out.push(JsItem::System {
+                                title: name,
+                                system_type,
+                                items: sub,
+                            });
+                        }
+                    }
+                }
+            }
+
+            let mut js_menus = Vec::new();
+            for m in &menus {
+                let mut items = Vec::new();
+                encode_items(&m.items, keymap, actions, &mut items);
+                js_menus.push(JsMenu {
+                    title: &m.name,
+                    items,
+                });
+            }
+            let spec = JsSpec { menus: js_menus };
+            let json = serde_json::to_string(&spec).unwrap_or_else(|_| "{\"menus\":[]}".into());
+            unsafe { zed_register_menu_handler() };
+            use std::ffi::CString;
+            if let Ok(cjson) = CString::new(json) {
+                unsafe { zed_set_main_menu_json(cjson.as_ptr()) };
+            }
+
+            state.menus = Some(menus.into_iter().map(|menu| menu.owned()).collect());
+            return;
         }
-        self.0.lock().menus = Some(menus.into_iter().map(|menu| menu.owned()).collect());
+
+        // Non-macOS: keep menus in state only.
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.0.lock().menus = Some(menus.into_iter().map(|menu| menu.owned()).collect());
+        }
     }
 
     fn get_menus(&self) -> Option<Vec<OwnedMenu>> {
@@ -921,7 +1309,8 @@ impl Platform for MacPlatform {
             let app: id = msg_send![APP_CLASS, sharedApplication];
             let mut state = self.0.lock();
             let actions = &mut state.menu_actions;
-            let new = self.create_dock_menu(menu, NSWindow::delegate(app), actions, keymap);
+            let delegate: id = msg_send![app, delegate];
+            let new = self.create_dock_menu(menu, delegate, actions, keymap);
             if let Some(old) = state.dock_menu.replace(new) {
                 CFRelease(old as _)
             }
@@ -1004,12 +1393,9 @@ impl Platform for MacPlatform {
     }
 
     fn should_auto_hide_scrollbars(&self) -> bool {
-        #[allow(non_upper_case_globals)]
-        const NSScrollerStyleOverlay: NSInteger = 1;
-
         unsafe {
             let style: NSInteger = msg_send![class!(NSScroller), preferredScrollerStyle];
-            style == NSScrollerStyleOverlay
+            style == (NSScrollerStyleOverlay as NSInteger)
         }
     }
 
@@ -1059,31 +1445,29 @@ impl Platform for MacPlatform {
 
                 // Only set rich text clipboard types if we actually have 1+ images to include.
                 if any_images {
-                    let rtfd_data = attributed_string.RTFDFromRange_documentAttributes_(
-                        NSRange::new(0, msg_send![attributed_string, length]),
-                        nil,
-                    );
+                    let len: u64 = msg_send![attributed_string, length];
+                    let rtfd_data = attributed_string
+                        .RTFDFromRange_documentAttributes_(NSRange::new(0, len as usize), nil);
                     if rtfd_data != nil {
                         state
                             .pasteboard
-                            .setData_forType(rtfd_data, NSPasteboardTypeRTFD);
+                            .setData_forType(rtfd_data, NSPasteboardTypeRTFD as *const _ as id);
                     }
 
-                    let rtf_data = attributed_string.RTFFromRange_documentAttributes_(
-                        NSRange::new(0, attributed_string.length()),
-                        nil,
-                    );
+                    let len2: u64 = attributed_string.length();
+                    let rtf_data = attributed_string
+                        .RTFFromRange_documentAttributes_(NSRange::new(0, len2 as usize), nil);
                     if rtf_data != nil {
                         state
                             .pasteboard
-                            .setData_forType(rtf_data, NSPasteboardTypeRTF);
+                            .setData_forType(rtf_data, NSPasteboardTypeRTF as *const _ as id);
                     }
                 }
 
                 let plain_text = attributed_string.string();
                 state
                     .pasteboard
-                    .setString_forType(plain_text, NSPasteboardTypeString);
+                    .setString_forType(plain_text, NSPasteboardTypeString as *const _ as id);
             }
         }
     }
@@ -1092,7 +1476,7 @@ impl Platform for MacPlatform {
         let state = self.0.lock();
         let pasteboard = state.pasteboard;
 
-        // First, see if it's a string.
+        // Preserve original behavior (metadata-aware) for text; use Swift only for images.
         unsafe {
             let types: id = pasteboard.types();
             let string_type: id = ns_string("public.utf8-plain-text");
@@ -1262,6 +1646,13 @@ impl MacPlatform {
 
     unsafe fn write_plaintext_to_clipboard(&self, string: &ClipboardString) {
         unsafe {
+            // Fast path: if there is no metadata, use Swift-native pasteboard write for text.
+            if string.metadata.is_none() {
+                if let Ok(cstr) = std::ffi::CString::new(string.text.as_str()) {
+                    zed_pasteboard_write_text(cstr.as_ptr());
+                    return;
+                }
+            }
             let state = self.0.lock();
             state.pasteboard.clearContents();
 
@@ -1272,7 +1663,7 @@ impl MacPlatform {
             );
             state
                 .pasteboard
-                .setData_forType(text_bytes, NSPasteboardTypeString);
+                .setData_forType(text_bytes, NSPasteboardTypeString as *const _ as id);
 
             if let Some(metadata) = string.metadata.as_ref() {
                 let hash_bytes = ClipboardString::text_hash(&string.text).to_be_bytes();
@@ -1299,15 +1690,27 @@ impl MacPlatform {
 
     unsafe fn write_image_to_clipboard(&self, image: &Image) {
         unsafe {
+            let uti = match image.format {
+                ImageFormat::Png => "public.png",
+                ImageFormat::Jpeg => "public.jpeg",
+                ImageFormat::Tiff => "public.tiff",
+                ImageFormat::Webp => "org.webmproject.webp",
+                ImageFormat::Gif => "com.compuserve.gif",
+                ImageFormat::Bmp => "com.microsoft.bmp",
+                ImageFormat::Svg => "public.svg-image",
+            };
+            if let Ok(cuti) = std::ffi::CString::new(uti) {
+                zed_pasteboard_write_image(image.bytes.as_ptr(), image.bytes.len(), cuti.as_ptr());
+                return;
+            }
+            // Fallback to legacy path if UTI conversion failed
             let state = self.0.lock();
             state.pasteboard.clearContents();
-
             let bytes = NSData::dataWithBytes_length_(
                 nil,
                 image.bytes.as_ptr() as *const c_void,
                 image.bytes.len() as u64,
             );
-
             state
                 .pasteboard
                 .setData_forType(bytes, Into::<UTType>::into(image.format).inner_mut());
@@ -1319,22 +1722,51 @@ fn try_clipboard_image(pasteboard: id, format: ImageFormat) -> Option<ClipboardI
     let mut ut_type: UTType = format.into();
 
     unsafe {
+        // Use Swift-native pasteboard read for the given UTI
+        let uti = match format {
+            ImageFormat::Png => "public.png",
+            ImageFormat::Jpeg => "public.jpeg",
+            ImageFormat::Tiff => "public.tiff",
+            ImageFormat::Webp => "org.webmproject.webp",
+            ImageFormat::Gif => "com.compuserve.gif",
+            ImageFormat::Bmp => "com.microsoft.bmp",
+            ImageFormat::Svg => "public.svg-image",
+        };
+        if let Ok(cuti) = std::ffi::CString::new(uti) {
+            let mut len: usize = 0;
+            let ptr = zed_pasteboard_read_image(cuti.as_ptr(), &mut len as *mut usize);
+            if !ptr.is_null() && len > 0 {
+                let bytes = Vec::from_raw_parts(ptr, len, len);
+                let id_val = hash(&bytes);
+                // We must not free ptr after Vec::from_raw_parts
+                return Some(ClipboardItem {
+                    entries: vec![ClipboardEntry::Image(Image {
+                        format,
+                        bytes,
+                        id: id_val,
+                    })],
+                });
+            }
+        }
+        // Fallback to legacy path
         let types: id = pasteboard.types();
         if msg_send![types, containsObject: ut_type.inner()] {
             let data = pasteboard.dataForType(ut_type.inner_mut());
             if data == nil {
-                None
-            } else {
-                let bytes = Vec::from(slice::from_raw_parts(
-                    data.bytes() as *mut u8,
-                    data.length() as usize,
-                ));
-                let id = hash(&bytes);
-
-                Some(ClipboardItem {
-                    entries: vec![ClipboardEntry::Image(Image { format, bytes, id })],
-                })
+                return None;
             }
+            let bytes = Vec::from(slice::from_raw_parts(
+                data.bytes() as *mut u8,
+                data.length() as usize,
+            ));
+            let id_val = hash(&bytes);
+            Some(ClipboardItem {
+                entries: vec![ClipboardEntry::Image(Image {
+                    format,
+                    bytes,
+                    id: id_val,
+                })],
+            })
         } else {
             None
         }
@@ -1518,6 +1950,82 @@ unsafe fn ns_url_to_path(url: id) -> Result<PathBuf> {
     })))
 }
 
+// Panel callbacks from Swift (C ABI)
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_open_panel_result(request_id: u64, json: *const ::std::os::raw::c_char) {
+    use futures::channel::oneshot;
+    use std::collections::HashMap;
+    use std::ffi::CStr;
+    use std::sync::{Mutex as StdMutex, OnceLock};
+    type OpenTx = oneshot::Sender<Result<Option<Vec<PathBuf>>>>;
+    static OPEN_SENDERS: OnceLock<StdMutex<HashMap<u64, OpenTx>>> = OnceLock::new();
+    let map_lock = OPEN_SENDERS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let sender = map_lock.lock().unwrap().remove(&request_id);
+    if let Some(tx) = sender {
+        let s = unsafe { CStr::from_ptr(json) }
+            .to_string_lossy()
+            .to_string();
+        #[derive(serde::Deserialize)]
+        struct OpenRes {
+            paths: Option<Vec<String>>,
+        }
+        let parsed: Result<OpenRes> = serde_json::from_str(&s).map_err(|e| anyhow!(e));
+        let result = parsed.map(|res| {
+            res.paths
+                .map(|v| v.into_iter().map(PathBuf::from).collect())
+        });
+        let _ = tx.send(result);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_save_panel_result(request_id: u64, json: *const ::std::os::raw::c_char) {
+    use futures::channel::oneshot;
+    use std::collections::HashMap;
+    use std::ffi::CStr;
+    use std::sync::{Mutex as StdMutex, OnceLock};
+    type SaveTx = oneshot::Sender<Result<Option<PathBuf>>>;
+    static SAVE_SENDERS: OnceLock<StdMutex<HashMap<u64, SaveTx>>> = OnceLock::new();
+    let map_lock = SAVE_SENDERS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let sender = map_lock.lock().unwrap().remove(&request_id);
+    if let Some(tx) = sender {
+        let s = unsafe { CStr::from_ptr(json) }
+            .to_string_lossy()
+            .to_string();
+        #[derive(serde::Deserialize)]
+        struct SaveRes {
+            path: Option<String>,
+        }
+        let parsed: Result<SaveRes> = serde_json::from_str(&s).map_err(|e| anyhow!(e));
+        let result = parsed.map(|res| {
+            res.path.map(|p| {
+                let mut result = PathBuf::from(p);
+                // Apply Sequoia filename fix from legacy path for parity
+                if let Some(filename) = result.file_name() {
+                    let chunks: Vec<_> = filename.as_bytes().split(|&b| b == b'.').collect();
+                    if chunks.len() == 3
+                        && chunks[1].starts_with(chunks[2])
+                        && MacPlatform::os_version() >= SemanticVersion::new(15, 0, 0)
+                    {
+                        use std::ffi::OsStr;
+                        let new_filename = OsStr::from_bytes(
+                            &filename.as_bytes()[..chunks[0].len() + 1 + chunks[1].len()],
+                        )
+                        .to_owned();
+                        result.set_file_name(&new_filename);
+                    }
+                }
+                result
+            })
+        });
+        let _ = tx.send(result);
+    }
+}
+
+// (Helper conversions for typed objc2 objects will be added when migrating sections.)
+
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
     pub(super) fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut Object;
@@ -1589,7 +2097,7 @@ struct UTType(id);
 impl UTType {
     pub fn png() -> Self {
         // https://developer.apple.com/documentation/uniformtypeidentifiers/uttype-swift.struct/png
-        Self(unsafe { NSPasteboardTypePNG }) // This is a rare case where there's a built-in NSPasteboardType
+        Self(unsafe { NSPasteboardTypePNG } as *const _ as id) // Built-in NSPasteboardType
     }
 
     pub fn jpeg() -> Self {
@@ -1619,7 +2127,7 @@ impl UTType {
 
     pub fn tiff() -> Self {
         // https://developer.apple.com/documentation/uniformtypeidentifiers/uttype-swift.struct/tiff
-        Self(unsafe { NSPasteboardTypeTIFF }) // This is a rare case where there's a built-in NSPasteboardType
+        Self(unsafe { NSPasteboardTypeTIFF } as *const _ as id) // Built-in NSPasteboardType
     }
 
     fn inner(&self) -> *const Object {
@@ -1665,7 +2173,7 @@ mod tests {
                 .0
                 .lock()
                 .pasteboard
-                .setData_forType(bytes, NSPasteboardTypeString);
+                .setData_forType(bytes, NSPasteboardTypeString as *const _ as id);
         }
         assert_eq!(
             platform.read_from_clipboard(),

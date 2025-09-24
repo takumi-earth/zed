@@ -107,6 +107,7 @@ members = [
     "crates/markdown_preview",
     "crates/media",
     "crates/menu",
+    "crates/macos_appkit_bridge",
     "crates/migrator",
     "crates/mistral",
     "crates/multi_buffer",
