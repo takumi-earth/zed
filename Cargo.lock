@@ -782,24 +782,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ashpd"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da0986d5b4f0802160191ad75f8d33ada000558757db3defb70299ca95d9fcbd"
-dependencies = [
- "async-fs",
- "async-net",
- "enumflags2",
- "futures-channel",
- "futures-util",
- "rand 0.9.1",
- "serde",
- "serde_repr",
- "url",
- "zbus",
-]
-
-[[package]]
 name = "askpass"
 version = "0.1.0"
 dependencies = [
@@ -1349,6 +1331,22 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.2",
  "tungstenite 0.26.2",
+]
+
+[[package]]
+name = "async-tungstenite"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee88b4c88ac8c9ea446ad43498955750a4bbe64c4392f21ccfe5d952865e318f"
+dependencies = [
+ "atomic-waker",
+ "futures-core",
+ "futures-io",
+ "futures-task",
+ "log",
+ "pin-project-lite",
+ "tokio",
+ "tungstenite 0.27.0",
 ]
 
 [[package]]
@@ -2325,7 +2323,7 @@ dependencies = [
  "log",
  "mint",
  "naga",
- "objc2",
+ "objc2 0.6.1",
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -2384,12 +2382,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-sys"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae85a0696e7ea3b835a453750bf002770776609115e6d25c6d2ff28a8200f7e7"
+dependencies = [
+ "objc-sys",
+]
+
+[[package]]
+name = "block2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e58aa60e59d8dbfcc36138f5f18be5f24394d33b38b24f7fd0b1caa33095f22f"
+dependencies = [
+ "block-sys",
+ "objc2 0.5.2",
+]
+
+[[package]]
 name = "block2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "340d2f0bdb2a43c1d3cd40513185b2bd7def0aa1052f956455114bc98f82dcf2"
 dependencies = [
- "objc2",
+ "objc2 0.6.1",
 ]
 
 [[package]]
@@ -3103,7 +3120,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-tungstenite",
+ "async-tungstenite 0.29.1",
  "base64 0.22.1",
  "chrono",
  "clock",
@@ -3325,7 +3342,7 @@ dependencies = [
  "assistant_context",
  "assistant_slash_command",
  "async-trait",
- "async-tungstenite",
+ "async-tungstenite 0.29.1",
  "audio",
  "aws-config",
  "aws-sdk-kinesis",
@@ -4938,7 +4955,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags 2.9.0",
- "objc2",
+ "objc2 0.6.1",
 ]
 
 [[package]]
@@ -6205,7 +6222,7 @@ name = "fs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ashpd 0.11.0",
+ "ashpd",
  "async-tar",
  "async-trait",
  "cocoa 0.26.0",
@@ -7036,7 +7053,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
- "ashpd 0.11.0",
+ "ashpd",
  "async-task",
  "backtrace",
  "bindgen 0.71.1",
@@ -7068,18 +7085,20 @@ dependencies = [
  "futures 0.3.31",
  "gpui_macros",
  "http_client",
+ "icrate",
  "image",
  "inventory",
  "itertools 0.14.0",
  "libc",
  "log",
  "lyon",
+ "macos_appkit_bridge",
  "media",
  "metal",
  "naga",
  "num_cpus",
  "objc",
- "objc2",
+ "objc2 0.6.1",
  "objc2-metal",
  "oo7",
  "open",
@@ -7748,6 +7767,16 @@ dependencies = [
  "serde",
  "strum 0.27.1",
  "workspace-hack",
+]
+
+[[package]]
+name = "icrate"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fb69199826926eb864697bddd27f73d9fddcffc004f5733131e15b465e30642"
+dependencies = [
+ "block2 0.4.0",
+ "objc2 0.5.2",
 ]
 
 [[package]]
@@ -8451,7 +8480,7 @@ source = "git+https://github.com/ConradIrwin/runtimed?rev=7130c804216b6914355d15
 dependencies = [
  "anyhow",
  "async-trait",
- "async-tungstenite",
+ "async-tungstenite 0.29.1",
  "futures 0.3.31",
  "jupyter-protocol",
  "serde",
@@ -9400,6 +9429,10 @@ checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "macos_appkit_bridge"
+version = "0.1.0"
 
 [[package]]
 name = "malloc_buf"
@@ -10416,6 +10449,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc-sys"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdb91bdd390c7ce1a8607f35f3ca7151b65afc0ff5ff3b34fa350f7d7c7e4310"
+
+[[package]]
+name = "objc2"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46a785d4eeff09c14c487497c162e92766fbb3e4059a71840cecc03d9a50b804"
+dependencies = [
+ "objc-sys",
+ "objc2-encode",
+]
+
+[[package]]
 name = "objc2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10431,7 +10480,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6f29f568bec459b0ddff777cec4fe3fd8666d82d5a40ebd0ff7e66134f89bcc"
 dependencies = [
  "bitflags 2.9.0",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-foundation",
  "objc2-foundation",
  "objc2-quartz-core",
@@ -10445,7 +10494,7 @@ checksum = "10cbe18d879e20a4aea544f8befe38bcf52255eb63d3f23eca2842f3319e4c07"
 dependencies = [
  "bitflags 2.9.0",
  "libc",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-audio",
  "objc2-core-audio-types",
  "objc2-core-foundation",
@@ -10459,7 +10508,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca44961e888e19313b808f23497073e3f6b3c22bb485056674c8b49f3b025c82"
 dependencies = [
  "dispatch2",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-audio-types",
  "objc2-core-foundation",
 ]
@@ -10471,7 +10520,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f1cc99bb07ad2ddb6527ddf83db6a15271bb036b3eb94b801cd44fdc666ee1"
 dependencies = [
  "bitflags 2.9.0",
- "objc2",
+ "objc2 0.6.1",
 ]
 
 [[package]]
@@ -10482,7 +10531,7 @@ checksum = "1c10c2894a6fed806ade6027bcd50662746363a9589d3ec9d9bef30a4e4bc166"
 dependencies = [
  "bitflags 2.9.0",
  "dispatch2",
- "objc2",
+ "objc2 0.6.1",
 ]
 
 [[package]]
@@ -10498,7 +10547,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "900831247d2fe1a09a683278e5384cfb8c80c79fe6b166f9d14bfdde0ea1b03c"
 dependencies = [
  "bitflags 2.9.0",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-foundation",
 ]
 
@@ -10509,9 +10558,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f246c183239540aab1782457b35ab2040d4259175bd1d0c58e46ada7b47a874"
 dependencies = [
  "bitflags 2.9.0",
- "block2",
+ "block2 0.6.1",
  "dispatch2",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-foundation",
  "objc2-foundation",
 ]
@@ -10523,7 +10572,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90ffb6a0cd5f182dc964334388560b12a57f7b74b3e2dec5e2722aa2dfb2ccd5"
 dependencies = [
  "bitflags 2.9.0",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-foundation",
  "objc2-foundation",
  "objc2-metal",
@@ -10536,7 +10585,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25b1312ad7bc8a0e92adae17aa10f90aae1fb618832f9b993b022b591027daed"
 dependencies = [
  "bitflags 2.9.0",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-foundation",
  "objc2-foundation",
  "objc2-quartz-core",
@@ -10630,12 +10679,12 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "oo7"
-version = "0.5.0"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3299dd401feaf1d45afd8fd1c0586f10fcfb22f244bb9afa942cec73503b89d"
+checksum = "6cb23d3ec3527d65a83be1c1795cb883c52cfa57147d42acc797127df56fc489"
 dependencies = [
  "aes",
- "ashpd 0.12.0",
+ "ashpd",
  "async-fs",
  "async-io",
  "async-lock",
@@ -13092,7 +13141,8 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "async-dispatcher",
- "async-tungstenite",
+ "async-tungstenite 0.29.1",
+ "async-tungstenite 0.31.0",
  "base64 0.22.1",
  "client",
  "collections",
@@ -13441,7 +13491,7 @@ name = "rpc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-tungstenite",
+ "async-tungstenite 0.29.1",
  "base64 0.22.1",
  "chrono",
  "collections",
@@ -17192,6 +17242,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tungstenite"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
+dependencies = [
+ "bytes 1.10.1",
+ "data-encoding",
+ "http 1.3.1",
+ "httparse",
+ "log",
+ "rand 0.9.1",
+ "sha1",
+ "thiserror 2.0.12",
+ "utf-8",
+]
+
+[[package]]
 name = "typed-path"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -19631,7 +19698,7 @@ dependencies = [
  "arrayvec",
  "async-compression",
  "async-std",
- "async-tungstenite",
+ "async-tungstenite 0.29.1",
  "aws-config",
  "aws-credential-types",
  "aws-runtime",
@@ -19728,7 +19795,7 @@ dependencies = [
  "num-iter",
  "num-rational",
  "num-traits",
- "objc2",
+ "objc2 0.6.1",
  "objc2-core-foundation",
  "objc2-foundation",
  "objc2-metal",
@@ -20185,7 +20252,7 @@ dependencies = [
  "agent_settings",
  "agent_ui",
  "anyhow",
- "ashpd 0.11.0",
+ "ashpd",
  "askpass",
  "assets",
  "assistant_tools",
