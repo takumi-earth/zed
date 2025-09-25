@@ -62,8 +62,8 @@ macro_rules! id_type {
         }
 
         impl sea_orm::sea_query::Nullable for $name {
-            fn null() -> Value {
-                Value::Int(None)
+            fn null() -> sea_orm::sea_query::Value {
+                sea_orm::sea_query::Value::Int(None)
             }
         }
     };

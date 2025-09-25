@@ -17,6 +17,11 @@ alacritty_terminal.workspace = true
 anyhow.workspace = true
 async-dispatcher.workspace = true
 async-tungstenite = { workspace = true, features = ["tokio", "tokio-rustls-manual-roots"] }
+# Force-enable `tokio` feature on async-tungstenite v0.31 used by
+# transitive dependency `jupyter-websocket-client` to avoid E0432
+# (unresolved import `async_tungstenite::tokio`). The alias ensures
+# feature unification applies to that version across the graph.
+async_tungstenite_031 = { package = "async-tungstenite", version = "0.31.0", default-features = false, features = ["tokio-runtime"] }
 base64.workspace = true
 client.workspace = true
 collections.workspace = true
