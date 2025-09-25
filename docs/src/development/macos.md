@@ -57,6 +57,50 @@ And to run the tests:
 cargo test --workspace
 ```
 
+## Signing & Notarizing Your Own macOS Bundles
+
+When you ship a locally patched build to `/Applications`, macOS Gatekeeper will block it unless it is
+codesigned and notarized. You can reuse the repository’s `script/bundle-mac` helper with your own Apple
+Developer credentials:
+
+1. **Prerequisites**
+   - Apple Developer Program membership and Xcode installed (`xcode-select --install`).
+   - Sign in to Xcode with your developer Apple ID so it can manage certificates.
+2. **Create credentials**
+   - In Certificates, generate a *Developer ID Application* certificate, import it into Keychain Access,
+     then export the cert + private key as a password-protected `DeveloperID.p12`.
+   - In App Store Connect ▸ Users and Access ▸ Keys, create a notarization API key. Record the *Issuer ID*,
+     *Key ID*, and download the `AuthKey_<KEYID>.p8` file.
+3. **Base64-encode the secrets** (avoids having to manage temporary files in the script):
+   ```bash
+   base64 -i DeveloperID.p12 > cert.b64
+   base64 -i AuthKey_ABCD1234.p8 > notary.b64
+   ```
+4. **Export environment variables** before running the bundler (replace placeholders with your values):
+   ```bash
+   export MACOS_CERTIFICATE=$(cat cert.b64)
+   export MACOS_CERTIFICATE_PASSWORD='p12-password'
+   export APPLE_NOTARIZATION_KEY=$(cat notary.b64)
+   export APPLE_NOTARIZATION_KEY_ID='ABCD1234'          # App Store Connect Key ID
+   export APPLE_NOTARIZATION_ISSUER_ID='abcdef12-...'   # App Store Connect Issuer ID
+   ```
+5. **Bundle, sign, notarize, and install**
+   ```bash
+   script/bundle-mac -l -i
+   ```
+   - `-l` builds for the local architecture (faster).
+   - `-i` installs the notarized app into `/Applications` once stapling succeeds.
+   - Add `-o` if you want the script to open the resulting app automatically.
+6. When the environment variables are present, `bundle-mac` handles: importing the certificate into a
+   temporary keychain ➝ codesigning ➝ submitting with `notarytool` ➝ stapling ➝ cleaning up the keychain.
+   Watch the script output for the notarization ticket URL if Apple rejects the build.
+7. **First launch**: the stapled bundle opens without the "unverified developer" warning. If macOS still
+   prompts, use Finder ▸ right-click ▸ *Open* once to whitelist it.
+8. **Clean up**: unset the exported variables or close the shell session, and delete the intermediate `.b64`
+   files when you’re finished.
+
+Repeat the same command after every code change to keep `/Applications/Zed.app` aligned with your fork.
+
 ## Troubleshooting
 
 ### Error compiling metal shaders
